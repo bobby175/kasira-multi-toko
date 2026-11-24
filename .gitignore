@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output (keep for open source)
+# dist/
+
+# Data (jangan commit data toko sebenarnya)
+data/*
+!data/uploads/
+data/uploads/*
+!data/uploads/.gitkeep
+*.db
+*.db-wal
+*.db-shm
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temporary files
+*.tmp
+*.temp

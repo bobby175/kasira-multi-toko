@@ -1,0 +1,232 @@
+@import "tailwindcss";
+
+/* Side-by-side layout: tablets/PCs (>= 768px wide) and phones held in landscape. */
+@custom-variant wide {
+  @media (min-width: 48rem), (orientation: landscape) and (max-height: 520px) {
+    @slot;
+  }
+}
+
+/* Phone in landscape (short screen): compact spacing so everything fits the height. */
+@custom-variant short {
+  @media (orientation: landscape) and (max-height: 520px) {
+    @slot;
+  }
+}
+
+@theme {
+  --font-sans: "Plus Jakarta Sans Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --color-brand-50: #f0f0ff;
+  --color-brand-100: #e4e3ff;
+  --color-brand-200: #ccc9ff;
+  --color-brand-300: #aaa3ff;
+  --color-brand-400: #8b7dfc;
+  --color-brand-500: #7058f6;
+  --color-brand-600: #5f3bea;
+  --color-brand-700: #512dcf;
+  --color-brand-800: #4227a7;
+  --color-brand-900: #382684;
+  --color-brand-950: #0f0d24;
+
+  --animate-fade-in: fade-in 0.2s ease-out both;
+  --animate-pop-in: pop-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1.15) both;
+  --animate-sheet-up: sheet-up 0.3s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  --animate-slide-in: slide-in 0.3s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  --animate-bump: bump 0.35s ease-out;
+  --animate-float: float 14s ease-in-out infinite;
+  --animate-check: check-draw 0.6s 0.25s ease-out both;
+  --animate-ring: ring-burst 0.9s ease-out both;
+  --animate-flash: flash 1.6s ease-out both;
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes pop-in {
+    from { opacity: 0; transform: translateY(10px) scale(0.97); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes sheet-up {
+    from { transform: translateY(100%); }
+    to { transform: none; }
+  }
+  @keyframes slide-in {
+    from { opacity: 0; transform: translateY(-12px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes bump {
+    0% { transform: scale(1); }
+    40% { transform: scale(0.95); }
+    100% { transform: scale(1); }
+  }
+  @keyframes float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(6%, -8%) scale(1.08); }
+    66% { transform: translate(-6%, 6%) scale(0.95); }
+  }
+  @keyframes check-draw {
+    from { stroke-dashoffset: 48; }
+    to { stroke-dashoffset: 0; }
+  }
+  @keyframes flash {
+    0%, 35% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  @keyframes ring-burst {
+    0% { transform: scale(0.6); opacity: 0.9; }
+    100% { transform: scale(1.9); opacity: 0; }
+  }
+}
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-slate-100 text-slate-800 antialiased;
+    font-feature-settings: "ss01", "cv11";
+  }
+  button, [role="button"], label[for], select {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-brand-500);
+    outline-offset: 2px;
+  }
+  input, select, textarea {
+    font-size: 16px; /* prevents iOS zoom on focus */
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition
+      select-none active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100;
+  }
+  .btn-lg {
+    @apply rounded-2xl px-5 py-3.5 text-base;
+  }
+  .btn-sm {
+    @apply rounded-lg px-3 py-1.5 text-xs;
+  }
+  .btn-primary {
+    @apply bg-linear-to-br from-brand-500 to-brand-700 text-white shadow-lg shadow-brand-600/25
+      hover:from-brand-600 hover:to-brand-800;
+  }
+  .btn-success {
+    @apply bg-linear-to-br from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-600/25
+      hover:from-emerald-600 hover:to-teal-700;
+  }
+  .btn-secondary {
+    @apply border border-slate-200 bg-white text-slate-700 shadow-xs hover:border-slate-300 hover:bg-slate-50;
+  }
+  .btn-ghost {
+    @apply text-slate-600 hover:bg-slate-100 hover:text-slate-900;
+  }
+  .btn-danger {
+    @apply border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100;
+  }
+  .btn-icon {
+    @apply inline-flex size-10 items-center justify-center rounded-xl text-slate-500 transition
+      hover:bg-slate-100 hover:text-slate-900 active:scale-95;
+  }
+
+  .card {
+    @apply rounded-2xl border border-slate-200/80 bg-white shadow-xs;
+  }
+
+  .label {
+    @apply mb-1.5 block text-sm font-semibold text-slate-700;
+  }
+  .input {
+    @apply w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-slate-800 shadow-xs transition
+      placeholder:text-slate-400 hover:border-slate-300 focus:border-brand-400 focus:ring-4 focus:ring-brand-500/15
+      focus:outline-hidden;
+  }
+  .hint {
+    @apply mt-1.5 text-xs text-slate-500;
+  }
+
+  .chip {
+    @apply inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-semibold transition;
+  }
+  .chip-on {
+    @apply border-transparent bg-slate-900 text-white shadow-md shadow-slate-900/15;
+  }
+  .chip-off {
+    @apply border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900;
+  }
+
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold;
+  }
+}
+
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Keeps content clear of the notch when a phone is held sideways. */
+@utility px-safe {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------- Receipt printing ---------- */
+#print-root {
+  display: none;
+}
+
+@media print {
+  @page {
+    margin: 0;
+  }
+  html, body {
+    background: #fff !important;
+  }
+  body > *:not(#print-root) {
+    display: none !important;
+  }
+  #print-root {
+    display: block !important;
+  }
+}
+
+.receipt {
+  color: #000;
+  background: #fff;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 3mm 3mm 6mm;
+  margin: 0 auto;
+}
+.receipt.paper-58 { width: 58mm; }
+.receipt.paper-80 { width: 80mm; font-size: 12px; }
+.receipt .r-center { text-align: center; }
+.receipt .r-title { font-size: 1.35em; font-weight: 800; letter-spacing: 0.02em; }
+.receipt .r-row { display: flex; justify-content: space-between; gap: 2mm; }
+.receipt .r-row > :last-child { text-align: right; white-space: nowrap; }
+.receipt .r-sep { border-top: 1px dashed #000; margin: 2mm 0; }
+.receipt .r-total { font-size: 1.25em; font-weight: 800; }
+.receipt .r-muted { color: #333; }
