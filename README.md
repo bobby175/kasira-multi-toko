@@ -7,6 +7,26 @@
 
 Tidak membutuhkan MySQL/PostgreSQL — seluruh data disimpan rapi menggunakan **SQLite bawaan Node.js**.
 
+> Hanya membutuhkan versi untuk **1 toko saja**? Lihat edisi ringan **[Kasira (Single-Toko)](https://github.com/bobby175/kasira)**.
+
+---
+
+## Video Pengenalan & Skema Penggunaan
+
+<p align="center">
+  <a href="https://github.com/bobby175/kasira-multi-toko/releases/tag/v1.0.0">
+    <img src="https://github.com/bobby175/kasira-multi-toko/releases/download/v1.0.0/kasira-preview.gif" alt="Preview Animasi Skema Penggunaan Kasira & Kasira Multi-Toko" width="100%" />
+  </a>
+</p>
+
+<p align="center">
+  🎬 <a href="https://github.com/bobby175/kasira-multi-toko/releases/download/v1.0.0/kasira-promo.mp4"><b>Unduh / Putar Video Full HD 1080p + Audio (13,4 MB)</b></a>
+  &nbsp;•&nbsp;
+  📱 <a href="https://github.com/bobby175/kasira-multi-toko/releases/download/v1.0.0/kasira-promo-github.mp4"><b>Versi Ringan 1080p (4,7 MB)</b></a>
+  &nbsp;•&nbsp;
+  📦 <a href="https://github.com/bobby175/kasira-multi-toko/releases/tag/v1.0.0"><b>Halaman Release v1.0.0</b></a>
+</p>
+
 ---
 
 ## Fitur Utama

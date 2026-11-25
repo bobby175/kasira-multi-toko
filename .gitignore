@@ -35,3 +35,6 @@ npm-debug.log*
 # Temporary files
 *.tmp
 *.temp
+
+# Rendered promo media (hosted on GitHub Releases to keep git clone fast)
+media/
