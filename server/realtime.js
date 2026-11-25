@@ -1,30 +1,34 @@
-// Real-time layer: staff devices and customer displays stay in sync via Socket.IO.
+// Real-time layer: staff devices and customer displays stay in sync per store via Socket.IO.
 import { Server } from 'socket.io';
-import { sessionFromCookieHeader, rateLimit } from './auth.js';
-import { getStoreSettings, getQrisInfo, listBanks, getTx, getProductLite, isValidDisplayKey } from './data.js';
+import { sessionFromCookieHeader, resolveActiveStore, rateLimit } from './auth.js';
+import {
+  getStoreSettings, getQrisInfo, listBanks, getTx, getProductLite, findStoreByDisplayKey, listStores,
+} from './data.js';
 
 let io = null;
 
-// What the customer display currently shows: idle | cart | payment | success | cancelled.
-let display = { phase: 'idle', txId: null };
-let displayTimer = null;
+// Per-store runtime state: { display: { phase, txId }, displayTimer, liveCart, cartRev }
+const storeStates = new Map();
 
 const RESULT_DURATION = { paid: 9000, cancelled: 5000 };
 
-/**
- * The order currently being rung up, mirrored to the customer display.
- * Only one cart is shown at a time: the most recent change from any cashier device wins.
- * Items hold product ids + quantities only; names and prices are always read from the database.
- */
-let liveCart = null; // { deviceId, items: [{ productId, qty }], cashier, rev, lastChangedId }
-let cartRev = 0;
-
 // Devices that just checked out: ignore a late "non-empty cart" message from them for a few seconds,
 // so a delayed update can't replace the QR code that was just shown.
-const checkedOut = new Map(); // deviceId -> timestamp
+const checkedOut = new Map(); // `${storeId}:${deviceId}` -> timestamp
 const CHECKOUT_GUARD_MS = 10_000;
 
 const cleanId = (value) => String(value ?? '').replace(/[^\w-]/g, '').slice(0, 64) || null;
+const staffRoom = (storeId) => `staff:${storeId}`;
+const displayRoom = (storeId) => `display:${storeId}`;
+
+function getState(storeId) {
+  let s = storeStates.get(storeId);
+  if (!s) {
+    s = { display: { phase: 'idle', txId: null }, displayTimer: null, liveCart: null, cartRev: 0 };
+    storeStates.set(storeId, s);
+  }
+  return s;
+}
 
 function originAllowed(req) {
   const origin = req.headers.origin;
@@ -49,40 +53,48 @@ export function initRealtime(httpServer) {
 
     if (displayKey) {
       if (!rateLimit(`display:${ip}`, 30, 10 * 60 * 1000)) return next(new Error('RATE_LIMITED'));
-      if (!isValidDisplayKey(displayKey)) return next(new Error('INVALID_DISPLAY_KEY'));
+      const store = findStoreByDisplayKey(displayKey);
+      if (!store) return next(new Error('INVALID_DISPLAY_KEY'));
       socket.data.kind = 'display';
+      socket.data.storeId = store.id;
       return next();
     }
 
     const session = sessionFromCookieHeader(socket.handshake.headers.cookie);
     if (!session) return next(new Error('UNAUTHORIZED'));
+    const store = resolveActiveStore(session.user, socket.handshake.auth?.storeId);
+    if (!store) return next(new Error('NO_STORE'));
     socket.data.kind = 'staff';
     socket.data.user = session.user;
+    socket.data.storeId = store.id;
     socket.data.tokenHash = session.tokenHash;
     socket.data.deviceId = cleanId(socket.handshake.auth?.deviceId);
     next();
   });
 
   io.on('connection', (socket) => {
+    const storeId = socket.data.storeId;
+
     if (socket.data.kind === 'display') {
-      socket.join('display');
-      socket.emit('display:state', buildDisplayState());
-      broadcastDisplayPresence();
-      socket.on('disconnect', broadcastDisplayPresence);
+      socket.join(displayRoom(storeId));
+      socket.emit('display:state', buildDisplayState(storeId));
+      broadcastDisplayPresence(storeId);
+      socket.on('disconnect', () => broadcastDisplayPresence(storeId));
       return; // displays are read-only: no event handlers
     }
 
-    socket.join('staff');
+    socket.join(staffRoom(storeId));
     socket.join(`user:${socket.data.user.id}`);
     socket.join(`session:${socket.data.tokenHash}`);
-    socket.emit('display:presence', { count: displayCount() });
+    if (socket.data.user.role === 'admin') socket.join('admins');
+    socket.emit('display:presence', { count: displayCount(storeId) });
 
     socket.on('cart:update', (payload) => handleCartUpdate(socket, payload));
     socket.on('disconnect', (reason) => {
       // Logged out / app closed on purpose: take that device's cart off the customer display.
       // Network drops and page reloads keep it, since the cart is still on the device.
       if (reason === 'server namespace disconnect' || reason === 'client namespace disconnect') {
-        dropCartOf(socket.data.deviceId);
+        dropCartOf(storeId, socket.data.deviceId);
       }
     });
   });
@@ -92,29 +104,53 @@ export function initRealtime(httpServer) {
 
 // ---------- Staff broadcasts ----------
 
-export function emitToStaff(event, payload) {
-  io?.to('staff').emit(event, payload);
+export function emitToStaff(storeId, event, payload) {
+  if (storeId) io?.to(staffRoom(storeId)).emit(event, payload);
 }
 
-function displayCount() {
-  return io?.of('/').adapter.rooms.get('display')?.size ?? 0;
+export function emitToAdmins(event, payload) {
+  io?.to('admins').emit(event, payload);
 }
 
-function broadcastDisplayPresence() {
-  emitToStaff('display:presence', { count: displayCount() });
+export function emitSettingsChanged(storeId = null) {
+  if (storeId) {
+    emitToStaff(storeId, 'settings:changed');
+    pushDisplay(storeId);
+    return;
+  }
+  for (const s of listStores()) {
+    emitToStaff(s.id, 'settings:changed');
+    pushDisplay(s.id);
+  }
 }
 
-/** Broadcast a transaction change. `req` identifies who acted and from which browser tab. */
+export function emitStoresChanged() {
+  emitToAdmins('stores:changed');
+}
+
+function displayCount(storeId) {
+  return io?.of('/').adapter.rooms.get(displayRoom(storeId))?.size ?? 0;
+}
+
+function broadcastDisplayPresence(storeId) {
+  emitToStaff(storeId, 'display:presence', { count: displayCount(storeId) });
+}
+
+/** Broadcast a transaction change to its store's staff and customer display. */
 export function txUpdated(transaction, action, req) {
-  emitToStaff('tx:updated', {
+  const storeId = transaction.storeId;
+  emitToStaff(storeId, 'tx:updated', {
     transaction,
     action,
     by: req?.user ? { id: req.user.id, name: req.user.name } : null,
     clientId: cleanId(req?.get?.('x-client-id')),
   });
-  if (display.txId === transaction.id) {
-    if (transaction.status === 'pending') pushDisplay();
-    else if (display.phase === 'payment') showResult(transaction);
+  emitToAdmins('admin:tx', { storeId, txId: transaction.id, createdAt: transaction.createdAt, action });
+
+  const state = getState(storeId);
+  if (state.display.txId === transaction.id) {
+    if (transaction.status === 'pending') pushDisplay(storeId);
+    else if (state.display.phase === 'payment') showResult(storeId, transaction);
   }
 }
 
@@ -126,8 +162,17 @@ export function disconnectSession(tokenHash) {
   io?.in(`session:${tokenHash}`).disconnectSockets(true);
 }
 
-export function disconnectDisplays() {
-  io?.in('display').disconnectSockets(true);
+export function disconnectDisplays(storeId) {
+  if (storeId) io?.in(displayRoom(storeId)).disconnectSockets(true);
+}
+
+export function cleanupStoreRealtime(storeId) {
+  disconnectDisplays(storeId);
+  const state = storeStates.get(storeId);
+  if (state) {
+    clearTimeout(state.displayTimer);
+    storeStates.delete(storeId);
+  }
 }
 
 // ---------- Live cart ----------
@@ -154,58 +199,66 @@ function increasedProduct(before, after) {
 function handleCartUpdate(socket, payload) {
   const items = sanitizeCartItems(payload?.items);
   const deviceId = socket.data.deviceId;
-  if (!items || !deviceId) return;
+  const storeId = socket.data.storeId;
+  if (!items || !deviceId || !storeId) return;
 
-  const guardedSince = checkedOut.get(deviceId);
+  const guardKey = `${storeId}:${deviceId}`;
+  const guardedSince = checkedOut.get(guardKey);
   if (guardedSince !== undefined) {
-    if (items.length === 0 || Date.now() - guardedSince > CHECKOUT_GUARD_MS) checkedOut.delete(deviceId);
+    if (items.length === 0 || Date.now() - guardedSince > CHECKOUT_GUARD_MS) checkedOut.delete(guardKey);
     else return;
   }
 
   if (items.length === 0) {
-    dropCartOf(deviceId);
+    dropCartOf(storeId, deviceId);
     return;
   }
 
-  const previous = liveCart?.deviceId === deviceId ? liveCart.items : [];
-  liveCart = {
+  const state = getState(storeId);
+  const previous = state.liveCart?.deviceId === deviceId ? state.liveCart.items : [];
+  state.liveCart = {
     deviceId,
     items,
     cashier: socket.data.user.name,
-    rev: ++cartRev,
+    rev: ++state.cartRev,
     lastChangedId: increasedProduct(previous, items),
   };
   // The cashier's latest action decides what the customer sees, so this also replaces
   // a payment or success screen. A pending payment can be brought back with "Ke Layar".
-  clearTimeout(displayTimer);
-  display = { phase: 'cart', txId: null };
-  pushDisplay();
+  clearTimeout(state.displayTimer);
+  state.display = { phase: 'cart', txId: null };
+  pushDisplay(storeId);
 }
 
-function dropCartOf(deviceId) {
-  if (!liveCart || liveCart.deviceId !== deviceId) return;
-  liveCart = null;
-  if (display.phase === 'cart') clearDisplay();
+function dropCartOf(storeId, deviceId) {
+  const state = storeStates.get(storeId);
+  if (!state || !state.liveCart || state.liveCart.deviceId !== deviceId) return;
+  state.liveCart = null;
+  if (state.display.phase === 'cart') clearDisplay(storeId);
 }
 
 /** Called when a transaction is created: that device's cart becomes the payment. */
 export function cartCheckedOut(req) {
   const deviceId = cleanId(req?.get?.('x-client-id'));
-  if (!deviceId) return;
-  checkedOut.set(deviceId, Date.now());
-  if (liveCart?.deviceId === deviceId) liveCart = null;
+  const storeId = req?.storeId;
+  if (!deviceId || !storeId) return;
+  checkedOut.set(`${storeId}:${deviceId}`, Date.now());
+  const state = storeStates.get(storeId);
+  if (state?.liveCart?.deviceId === deviceId) state.liveCart = null;
 }
 
 /** Re-send the cart (prices/names may have changed after a product edit). */
-export function refreshDisplayCart() {
-  if (display.phase === 'cart') pushDisplay();
+export function refreshDisplayCart(storeId) {
+  const state = storeStates.get(storeId);
+  if (state?.display.phase === 'cart') pushDisplay(storeId);
 }
 
-function buildCart() {
-  if (!liveCart) return null;
+function buildCart(storeId) {
+  const state = storeStates.get(storeId);
+  if (!state?.liveCart) return null;
   const items = [];
-  for (const { productId, qty } of liveCart.items) {
-    const product = getProductLite(productId);
+  for (const { productId, qty } of state.liveCart.items) {
+    const product = getProductLite(productId, storeId);
     if (product) items.push({ productId, name: product.name, price: product.price, qty, subtotal: product.price * qty });
   }
   if (items.length === 0) return null;
@@ -213,9 +266,9 @@ function buildCart() {
     items,
     itemCount: items.reduce((sum, i) => sum + i.qty, 0),
     total: items.reduce((sum, i) => sum + i.subtotal, 0),
-    cashier: liveCart.cashier,
-    rev: liveCart.rev,
-    lastChangedId: liveCart.lastChangedId,
+    cashier: state.liveCart.cashier,
+    rev: state.liveCart.rev,
+    lastChangedId: state.liveCart.lastChangedId,
   };
 }
 
@@ -236,54 +289,58 @@ function publicTx(tx) {
   };
 }
 
-export function buildDisplayState() {
-  const store = { name: getStoreSettings().name };
+export function buildDisplayState(storeId) {
+  const state = getState(storeId);
+  const store = { name: getStoreSettings(storeId).name };
   const empty = { store, phase: 'idle', cart: null, transaction: null, banks: [], qris: null };
 
-  if (display.phase === 'cart') {
-    const cart = buildCart();
+  if (state.display.phase === 'cart') {
+    const cart = buildCart(storeId);
     return cart ? { ...empty, phase: 'cart', cart } : empty;
   }
 
-  const tx = display.txId ? getTx(display.txId) : null;
-  if (!tx || display.phase === 'idle') return empty;
+  const tx = state.display.txId ? getTx(state.display.txId) : null;
+  if (!tx || tx.storeId !== storeId || state.display.phase === 'idle') return empty;
   let qris = null;
   if (tx.method === 'qris') {
-    const info = getQrisInfo();
+    const info = getQrisInfo(storeId);
     qris = { merchantName: info.merchantName || '', nmid: info.nmid || null };
   }
   return {
     ...empty,
-    phase: display.phase,
+    phase: state.display.phase,
     transaction: publicTx(tx),
-    banks: tx.method === 'transfer' ? listBanks() : [],
+    banks: tx.method === 'transfer' ? listBanks(storeId) : [],
     qris,
   };
 }
 
-export function pushDisplay() {
-  io?.to('display').emit('display:state', buildDisplayState());
+export function pushDisplay(storeId) {
+  if (storeId) io?.to(displayRoom(storeId)).emit('display:state', buildDisplayState(storeId));
 }
 
-export function showOnDisplay(txId) {
-  clearTimeout(displayTimer);
-  display = { phase: 'payment', txId };
-  pushDisplay();
+export function showOnDisplay(storeId, txId) {
+  const state = getState(storeId);
+  clearTimeout(state.displayTimer);
+  state.display = { phase: 'payment', txId };
+  pushDisplay(storeId);
 }
 
-function showResult(tx) {
-  clearTimeout(displayTimer);
-  display = { phase: tx.status === 'paid' ? 'success' : 'cancelled', txId: tx.id };
-  pushDisplay();
-  displayTimer = setTimeout(() => {
+function showResult(storeId, tx) {
+  const state = getState(storeId);
+  clearTimeout(state.displayTimer);
+  state.display = { phase: tx.status === 'paid' ? 'success' : 'cancelled', txId: tx.id };
+  pushDisplay(storeId);
+  state.displayTimer = setTimeout(() => {
     // Afterwards, show an order that is being rung up (if any), otherwise the welcome screen.
-    display = liveCart ? { phase: 'cart', txId: null } : { phase: 'idle', txId: null };
-    pushDisplay();
+    state.display = state.liveCart ? { phase: 'cart', txId: null } : { phase: 'idle', txId: null };
+    pushDisplay(storeId);
   }, RESULT_DURATION[tx.status] ?? 5000);
 }
 
-export function clearDisplay() {
-  clearTimeout(displayTimer);
-  display = { phase: 'idle', txId: null };
-  pushDisplay();
+export function clearDisplay(storeId) {
+  const state = getState(storeId);
+  clearTimeout(state.displayTimer);
+  state.display = { phase: 'idle', txId: null };
+  pushDisplay(storeId);
 }

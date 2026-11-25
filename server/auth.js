@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { db } from './db.js';
+import { getStoreRow, getStoreRowStrict } from './data.js';
 import { httpError } from './util.js';
 
 export const SESSION_COOKIE = 'kasira_sid';
@@ -32,7 +33,7 @@ const insertSession = db.prepare(
   'INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)'
 );
 const findSession = db.prepare(`
-  SELECT s.token_hash, s.expires_at, u.id, u.name, u.username, u.role, u.active
+  SELECT s.token_hash, s.expires_at, u.id, u.name, u.username, u.role, u.store_id, u.active
   FROM sessions s JOIN users u ON u.id = s.user_id
   WHERE s.token_hash = ?
 `);
@@ -88,8 +89,26 @@ export function sessionFromCookieHeader(cookieHeader) {
   }
   return {
     tokenHash,
-    user: { id: row.id, name: row.name, username: row.username, role: row.role },
+    user: {
+      id: row.id,
+      name: row.name,
+      username: row.username,
+      role: row.role,
+      storeId: row.store_id ?? null,
+    },
   };
+}
+
+/** Resolve the active store for a user. Karyawan is strictly locked to their assigned store. */
+export function resolveActiveStore(user, requestedStoreId = null) {
+  if (!user) return null;
+  if (user.role === 'karyawan') return getStoreRowStrict(user.storeId);
+  const id = Number(requestedStoreId);
+  if (Number.isSafeInteger(id) && id > 0) {
+    const chosen = getStoreRowStrict(id);
+    if (chosen) return chosen;
+  }
+  return getStoreRow(null);
 }
 
 export function setSessionCookie(req, res, token) {
@@ -112,17 +131,22 @@ export function attachUser(req, _res, next) {
   const session = sessionFromCookieHeader(req.headers.cookie);
   req.user = session?.user ?? null;
   req.sessionTokenHash = session?.tokenHash ?? null;
+  const store = resolveActiveStore(req.user, req.get('x-store-id'));
+  req.store = store;
+  req.storeId = store?.id ?? null;
   next();
 }
 
 export function requireAuth(req, _res, next) {
   if (!req.user) return next(httpError(401, 'Sesi berakhir. Silakan masuk kembali.'));
+  if (!req.storeId) return next(httpError(403, 'Toko yang ditugaskan tidak ditemukan. Hubungi admin.'));
   next();
 }
 
 export function requireAdmin(req, _res, next) {
   if (!req.user) return next(httpError(401, 'Sesi berakhir. Silakan masuk kembali.'));
   if (req.user.role !== 'admin') return next(httpError(403, 'Hanya admin yang dapat melakukan tindakan ini.'));
+  if (!req.storeId) return next(httpError(403, 'Belum ada toko yang terdaftar.'));
   next();
 }
 

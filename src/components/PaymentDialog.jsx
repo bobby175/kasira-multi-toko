@@ -73,13 +73,14 @@ function MethodSwitch({ tx, settings, busy, onChange }) {
 }
 
 export function PaymentDialog() {
-  const { activeTxId, txMap, closeTx, upsertTx, settings, cartApi, productMap } = useData();
+  const { activeTxId, txMap, closeTx, upsertTx, settings, stores, cartApi, productMap } = useData();
   const toast = useToast();
   const confirm = useConfirm();
   const [busy, setBusy] = useState(null);
 
   const tx = activeTxId ? txMap[activeTxId] : null;
   if (!tx) return null;
+  const receiptStore = stores.find((s) => s.id === tx.storeId) ?? settings.store;
 
   const run = async (key, fn) => {
     setBusy(key);
@@ -222,7 +223,7 @@ export function PaymentDialog() {
           <OrderSummary tx={tx} />
         </div>
         <div className="mt-6 grid w-full gap-3 sm:grid-cols-2 short:mt-0 short:grid-cols-1 short:gap-2.5">
-          <button type="button" className="btn btn-primary btn-lg short:rounded-xl short:py-2.5 short:text-sm" onClick={() => printReceipt(tx, settings.store)}>
+          <button type="button" className="btn btn-primary btn-lg short:rounded-xl short:py-2.5 short:text-sm" onClick={() => printReceipt(tx, receiptStore)}>
             <Printer className="size-5" /> Cetak Struk
           </button>
           <button type="button" className="btn btn-secondary btn-lg short:rounded-xl short:py-2.5 short:text-sm" onClick={newTransaction}>

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ImagePlus, Lock, Package, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { formatNumber, parseRupiahInput, rupiah } from '../lib/format.js';
@@ -147,9 +147,14 @@ function ProductForm({ product, categories, onClose, onSaved }) {
 
 export default function ProductsPage() {
   const { user } = useAuth();
-  const { products, productsLoaded, refreshProducts } = useData();
+  const { products, productsLoaded, refreshProducts, activeStoreId, settings, stores } = useData();
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState(null); // null | 'new' | product
+
+  useEffect(() => {
+    setQuery('');
+    setEditing(null);
+  }, [activeStoreId]);
 
   const categories = useMemo(() => [...new Set(products.map((p) => p.category).filter(Boolean))].sort(), [products]);
   const filtered = useMemo(() => {
@@ -163,7 +168,7 @@ export default function ProductsPage() {
     <div className="mx-auto max-w-6xl p-4 md:p-8 short:px-5 short:py-4">
       <PageHeader
         title="Produk"
-        description={`${products.length} produk • hanya admin yang dapat menambah dan mengubah harga`}
+        description={`${stores.length > 1 && settings.store.name ? `${settings.store.name} • ` : ''}${products.length} produk • hanya admin yang dapat menambah dan mengubah harga`}
         actions={
           <button type="button" className="btn btn-primary" onClick={() => setEditing('new')}>
             <Plus className="size-4" /> Tambah Produk

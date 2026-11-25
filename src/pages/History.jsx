@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, Clock3, History, Printer, ReceiptText, Search, TrendingUp } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Clock3, History, Printer, ReceiptText, Search, Store, TrendingUp } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { dayRange, formatDateLong, formatTime, rupiah, toDateInputValue } from '../lib/format.js';
+import { useAuth } from '../state/auth.jsx';
 import { useData } from '../state/data.jsx';
 import { PageHeader } from '../components/Shell.jsx';
 import { printReceipt } from '../components/Receipt.jsx';
@@ -29,12 +30,14 @@ function StatCard({ icon: Icon, label, value, sub, tone }) {
 }
 
 export default function HistoryPage() {
-  const { openTx, upsertTx, txMap, settings, subscribeTx } = useData();
+  const { user, stores, selectStore } = useAuth();
+  const { openTx, upsertTx, txMap, settings, activeStoreId, subscribeTx, subscribeAdminTx } = useData();
   const toast = useToast();
   const [reloadKey, setReloadKey] = useState(0);
   const silentReload = useRef(false);
   const [date, setDate] = useState(() => toDateInputValue(new Date()));
   const [status, setStatus] = useState('');
+  const [storeScope, setStoreScope] = useState('current'); // 'current' | 'all'
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
   const [list, setList] = useState([]);
@@ -42,6 +45,9 @@ export default function HistoryPage() {
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  const canAllStores = user.role === 'admin' && stores.length > 1;
+  const effectiveScope = canAllStores ? storeScope : 'current';
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query.trim()), 300);
@@ -62,15 +68,26 @@ export default function HistoryPage() {
     [subscribeTx, range]
   );
 
+  useEffect(() => {
+    if (effectiveScope !== 'all') return undefined;
+    return subscribeAdminTx(({ createdAt }) => {
+      if (createdAt >= range.from && createdAt < range.to) {
+        silentReload.current = true;
+        setReloadKey((k) => k + 1);
+      }
+    });
+  }, [subscribeAdminTx, effectiveScope, range]);
+
   const fetchPage = useCallback(
     async (before) => {
       const params = new URLSearchParams({ from: range.from, to: range.to, limit: 40 });
+      if (effectiveScope === 'all') params.set('store', 'all');
       if (status) params.set('status', status);
       if (debounced) params.set('q', debounced);
       if (before) params.set('before', before);
       return api(`/transactions?${params}`);
     },
-    [range, status, debounced]
+    [range, status, debounced, effectiveScope, activeStoreId] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   useEffect(() => {
@@ -120,7 +137,14 @@ export default function HistoryPage() {
   const waiting = sum((s) => s.status === 'pending');
   const isToday = date === toDateInputValue(new Date());
 
+  const storeForTx = (tx) => stores.find((s) => s.id === tx.storeId) ?? settings.store;
+
   const open = (tx) => {
+    if (tx.status === 'pending' && tx.storeId && tx.storeId !== activeStoreId && user.role === 'admin') {
+      selectStore(tx.storeId);
+      toast.info(`Beralih ke ${tx.storeName || 'toko tersebut'} untuk mengelola pembayaran menunggu`);
+      return;
+    }
     upsertTx(tx);
     openTx(tx.id);
   };
@@ -129,19 +153,44 @@ export default function HistoryPage() {
     <div className="mx-auto max-w-5xl p-4 md:p-8 short:px-5 short:py-4">
       <PageHeader
         title="Riwayat Transaksi"
-        description={formatDateLong(range.from)}
+        description={
+          effectiveScope === 'all'
+            ? `${formatDateLong(range.from)} • Gabungan semua toko (${stores.length})`
+            : `${formatDateLong(range.from)}${stores.length > 1 && settings.store.name ? ` • ${settings.store.name}` : ''}`
+        }
         actions={
-          <div className="flex items-center gap-1 rounded-2xl bg-white p-1 shadow-xs ring-1 ring-slate-200">
-            <button type="button" className="btn-icon size-9" onClick={() => shiftDay(-1)} aria-label="Hari sebelumnya">
-              <ChevronLeft className="size-5" />
-            </button>
-            <label className="relative flex items-center gap-2 px-2 text-sm font-semibold text-slate-700">
-              <CalendarDays className="size-4 text-brand-600" />
-              <input type="date" value={date} max={toDateInputValue(new Date())} onChange={(e) => e.target.value && setDate(e.target.value)} className="bg-transparent text-sm outline-hidden" />
-            </label>
-            <button type="button" className="btn-icon size-9" onClick={() => shiftDay(1)} disabled={isToday} aria-label="Hari berikutnya">
-              <ChevronRight className="size-5" />
-            </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {canAllStores && (
+              <div className="grid grid-cols-2 gap-1 rounded-2xl bg-white p-1 shadow-xs ring-1 ring-slate-200">
+                {[
+                  { id: 'current', label: 'Toko ini' },
+                  { id: 'all', label: 'Semua toko' },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setStoreScope(opt.id)}
+                    className={`rounded-xl px-3 py-1.5 text-xs font-bold transition ${
+                      effectiveScope === opt.id ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-1 rounded-2xl bg-white p-1 shadow-xs ring-1 ring-slate-200">
+              <button type="button" className="btn-icon size-9" onClick={() => shiftDay(-1)} aria-label="Hari sebelumnya">
+                <ChevronLeft className="size-5" />
+              </button>
+              <label className="relative flex items-center gap-2 px-2 text-sm font-semibold text-slate-700">
+                <CalendarDays className="size-4 text-brand-600" />
+                <input type="date" value={date} max={toDateInputValue(new Date())} onChange={(e) => e.target.value && setDate(e.target.value)} className="bg-transparent text-sm outline-hidden" />
+              </label>
+              <button type="button" className="btn-icon size-9" onClick={() => shiftDay(1)} disabled={isToday} aria-label="Hari berikutnya">
+                <ChevronRight className="size-5" />
+              </button>
+            </div>
           </div>
         }
       />
@@ -182,6 +231,11 @@ export default function HistoryPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-bold text-slate-900">{tx.code}</span>
                       <StatusPill status={tx.status} />
+                      {effectiveScope === 'all' && tx.storeName && (
+                        <span className="pill bg-slate-100 text-slate-700">
+                          <Store className="size-3" /> {tx.storeName}
+                        </span>
+                      )}
                       {tx.confirmSource === 'auto' && (
                         <span className="pill bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200" title="Dikonfirmasi otomatis dari notifikasi pembayaran">
                           Otomatis
@@ -199,7 +253,7 @@ export default function HistoryPage() {
                   </div>
                 </button>
                 {tx.status === 'paid' && (
-                  <button type="button" onClick={() => printReceipt(tx, settings.store)} className="btn-icon shrink-0" aria-label="Cetak struk" title="Cetak struk">
+                  <button type="button" onClick={() => printReceipt(tx, storeForTx(tx))} className="btn-icon shrink-0" aria-label="Cetak struk" title="Cetak struk">
                     <Printer className="size-[18px]" />
                   </button>
                 )}

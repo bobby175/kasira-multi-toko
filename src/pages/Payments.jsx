@@ -17,7 +17,7 @@ function useNow(intervalMs = 15000) {
 }
 
 export default function PaymentsPage() {
-  const { pending, openTx, upsertTx, connected } = useData();
+  const { pending, openTx, upsertTx, connected, settings, stores } = useData();
   const toast = useToast();
   const confirm = useConfirm();
   const now = useNow();
@@ -54,7 +54,11 @@ export default function PaymentsPage() {
     <div className="mx-auto max-w-5xl p-4 md:p-8 short:px-5 short:py-4">
       <PageHeader
         title="Pembayaran"
-        description="Daftar pembayaran yang menunggu konfirmasi dari semua perangkat. Ter-update otomatis."
+        description={
+          stores.length > 1 && settings.store.name
+            ? `Pembayaran menunggu konfirmasi untuk ${settings.store.name}. Ter-update otomatis.`
+            : 'Daftar pembayaran yang menunggu konfirmasi dari semua perangkat. Ter-update otomatis.'
+        }
         actions={
           <span className={`pill ${connected ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' : 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'}`}>
             <Radio className="size-3.5" /> {connected ? 'Real-time aktif' : 'Menyambung ulang...'}

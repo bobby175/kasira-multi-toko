@@ -81,8 +81,8 @@ export function LoginPage() {
     setBusy(true);
     setError('');
     try {
-      const { user } = await api('/auth/login', { method: 'POST', body: { username, password } });
-      setUser(user);
+      const { user, stores } = await api('/auth/login', { method: 'POST', body: { username, password } });
+      setUser(user, stores);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -143,8 +143,8 @@ export function SetupPage() {
     setBusy(true);
     setError('');
     try {
-      const { user } = await api('/setup', { method: 'POST', body: form });
-      setUser(user);
+      const { user, stores } = await api('/setup', { method: 'POST', body: form });
+      setUser(user, stores);
     } catch (err) {
       // Setup was already completed (e.g. from another device): go to the login form instead.
       if (err.status === 409) showLogin('Toko ini sudah pernah di-setup. Silakan masuk dengan akun Anda.');

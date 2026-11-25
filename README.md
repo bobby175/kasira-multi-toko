@@ -1,9 +1,9 @@
-# Kasira — Aplikasi Kasir (POS) Modern Open Source
+# Kasira Multi-Toko — Aplikasi Kasir (POS) Multi-Cabang Open Source
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-emerald.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.13-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 
-**Kasira** adalah aplikasi kasir (Point of Sale) berbasis web yang ringan, cepat, dan gratis untuk HP, tablet, dan PC. Mendukung **QRIS dinamis otomatis** (dari QRIS statis toko Anda), **transfer bank**, **layar pelanggan real-time**, **cetak struk thermal 58/80 mm**, serta **konfirmasi pembayaran otomatis dari notifikasi Android**.
+**Kasira Multi-Toko** adalah edisi multi-cabang dari aplikasi kasir (Point of Sale) berbasis web yang ringan, cepat, dan gratis untuk HP, tablet, dan PC. Mendukung **banyak toko/cabang dalam satu server**, **QRIS dinamis otomatis** (bisa pusat/tetap atau per cabang), **transfer bank**, **layar pelanggan real-time per cabang**, **cetak struk thermal 58/80 mm**, serta **konfirmasi pembayaran otomatis dari notifikasi Android**.
 
 Tidak membutuhkan MySQL/PostgreSQL — seluruh data disimpan rapi menggunakan **SQLite bawaan Node.js**.
 
@@ -12,6 +12,7 @@ Tidak membutuhkan MySQL/PostgreSQL — seluruh data disimpan rapi menggunakan **
 ## Fitur Utama
 
 - **Kasir (POS) Responsif**: grid produk dengan kategori & pencarian, keranjang real-time, nyaman di HP (portrait & landscape), tablet, maupun PC.
+- **Multi-Toko / Multi-Cabang**: satu Admin bisa mengelola banyak cabang dalam satu server (berpindah toko dari menu & melihat rekap riwayat gabungan), sedangkan Karyawan dikunci pada 1 toko tertentu. Produk, layar pelanggan, dan riwayat terpisah per toko; sedangkan **QRIS, Rekening Bank, dan Konfirmasi Otomatis** dapat diatur **Ikut Pusat (Tetap)** atau **Khusus per Toko**.
 - **QRIS Statis → Dinamis Otomatis**: cukup unggah foto/gambar QRIS statis toko sekali; setiap transaksi otomatis menghasilkan QRIS berisi nominal sehingga pelanggan tidak perlu mengetik nominal manual.
 - **Transfer Bank**: menampilkan daftar rekening toko beserta nominal transfer dengan rapi.
 - **Konfirmasi Manual & Otomatis**: transaksi berstatus *Menunggu* hingga dikonfirmasi staf, atau dikonfirmasi otomatis dari notifikasi aplikasi merchant QRIS / m-banking (opsional).
@@ -44,8 +45,8 @@ Pilih salah satu cara instalasi di bawah ini sesuai perangkat yang ingin dijadik
 
 2. **Clone repositori**
    ```bash
-   git clone https://github.com/bobby175/kasira.git
-   cd kasira
+   git clone https://github.com/bobby175/kasira-multi-toko.git
+   cd kasira-multi-toko
    ```
    *(Atau klik tombol **Code → Download ZIP** di GitHub lalu ekstrak).*
 
@@ -86,11 +87,11 @@ Karena Kasira hanya memakai dependensi JavaScript murni (`express` & `socket.io`
    *(Pastikan versi Node minimal `v22.13`).*
 3. **Clone & install dependensi server** *(folder `dist/` sudah disertakan, jadi cukup install dependensi produksi)*:
    ```bash
-   git clone https://github.com/bobby175/kasira.git ~/kasira
-   cd ~/kasira
+   git clone https://github.com/bobby175/kasira-multi-toko.git ~/kasira-multi-toko
+   cd ~/kasira-multi-toko
    npm install --omit=dev
    ```
-   > **Penting:** Simpan proyek di direktori internal Termux (`~/kasira`), **jangan** di `/sdcard/`, agar database SQLite (mode WAL) berjalan stabil.
+   > **Penting:** Simpan proyek di direktori internal Termux (`~/kasira-multi-toko`), **jangan** di `/sdcard/`, agar database SQLite (mode WAL) berjalan stabil.
 4. **Jalankan server**:
    ```bash
    termux-wake-lock
@@ -114,8 +115,8 @@ Karena Kasira hanya memakai dependensi JavaScript murni (`express` & `socket.io`
 
 1. Install **Node.js 22+**, clone repositori, lalu jalankan build:
    ```bash
-   git clone https://github.com/bobby175/kasira.git
-   cd kasira
+   git clone https://github.com/bobby175/kasira-multi-toko.git
+   cd kasira-multi-toko
    npm install
    npm run build
    ```
@@ -141,6 +142,12 @@ Karena Kasira hanya memakai dependensi JavaScript murni (`express` & `socket.io`
 ---
 
 ## Panduan Penggunaan Fitur
+
+### Multi-Toko / Multi-Cabang
+- **Menambah cabang**: buka **Pengaturan → Toko & Cabang → Tambah Toko**. Anda bisa menyalin daftar produk dari toko lain dan memilih apakah **QRIS**, **Rekening Bank**, serta **Konfirmasi Otomatis** memakai pengaturan **Pusat (Tetap)** atau **Khusus Cabang**.
+- **Berpindah toko (Admin)**: klik nama toko di sidebar (PC/tablet) atau bilah atas (HP) untuk berpindah cabang. Setiap cabang punya produk, keranjang, layar pelanggan, dan pembayaran menunggu sendiri.
+- **Karyawan per cabang**: saat menambah/mengedit akun di **Pengaturan → Pengguna**, pilih toko tempat karyawan bertugas. Karyawan otomatis dikunci hanya ke toko tersebut.
+- **Rekap gabungan**: di menu **Riwayat**, Admin dapat beralih antara **Toko ini** dan **Semua toko** untuk melihat total omzet gabungan seluruh cabang.
 
 ### Layar Pelanggan (Tampilan Ganda)
 Klik menu **Layar Pelanggan** (ikon monitor), lalu pilih salah satu:
@@ -245,6 +252,6 @@ Kasira mengubah QRIS statis Anda menjadi QRIS dinamis secara lokal dengan menyis
 
 ## Kontribusi & Lisensi
 
-Kontribusi, laporan bug, dan saran fitur sangat diterima melalui [Issues](https://github.com/bobby175/kasira/issues) atau Pull Request.
+Kontribusi, laporan bug, dan saran fitur sangat diterima melalui [Issues](https://github.com/bobby175/kasira-multi-toko/issues) atau Pull Request.
 
 Proyek ini dirilis dengan lisensi **MIT** — lihat berkas [LICENSE](LICENSE) untuk detail lengkap.

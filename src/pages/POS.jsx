@@ -178,7 +178,7 @@ function MethodDialog({ open, onClose, total, settings, onChoose, busy }) {
 
 export default function POSPage() {
   const { user } = useAuth();
-  const { products, productsLoaded, cart, cartLines, cartTotal, cartCount, cartApi, settings, upsertTx, openTx, pending, displayCount } = useData();
+  const { products, productsLoaded, cart, cartLines, cartTotal, cartCount, cartApi, settings, stores, activeStoreId, upsertTx, openTx, pending, displayCount } = useData();
   const toast = useToast();
 
   const [query, setQuery] = useState('');
@@ -188,6 +188,13 @@ export default function POSPage() {
   const [busy, setBusy] = useState(null);
   const searchRef = useRef(null);
   const shortScreen = useShortScreen();
+
+  useEffect(() => {
+    setQuery('');
+    setCategory('');
+    setSheetOpen(false);
+    setMethodOpen(false);
+  }, [activeStoreId]);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -239,7 +246,9 @@ export default function POSPage() {
       <section className="min-w-0 flex-1 wide:overflow-y-auto">
         <div className="flex items-end justify-between gap-4 px-4 pt-4 md:px-6 md:pt-6 short:hidden">
           <div>
-            <p className="text-sm text-slate-500">{formatDateLong(Date.now())}</p>
+            <p className="text-sm text-slate-500">
+              {formatDateLong(Date.now())}{stores.length > 1 && settings.store.name ? ` • ${settings.store.name}` : ''}
+            </p>
             <h1 className="text-xl font-extrabold tracking-tight text-slate-900 sm:text-2xl">
               {greeting}, {user.name.split(' ')[0]} <span className="inline-block origin-bottom-right animate-pop-in">👋</span>
             </h1>

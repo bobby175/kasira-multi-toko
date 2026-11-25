@@ -7,6 +7,7 @@ import { getStoreSettings } from './data.js';
 import { attachUser, csrfGuard } from './auth.js';
 import { initRealtime } from './realtime.js';
 import authRoutes from './routes/auth.js';
+import storeRoutes from './routes/stores.js';
 import productRoutes from './routes/products.js';
 import transactionRoutes from './routes/transactions.js';
 import settingsRoutes, { lanAddresses } from './routes/settings.js';
@@ -43,6 +44,7 @@ api.use((_req, res, next) => {
   next();
 });
 api.use(authRoutes);
+api.use('/stores', storeRoutes);
 api.use(settingsRoutes);
 api.use('/products', productRoutes);
 api.use('/transactions', transactionRoutes);

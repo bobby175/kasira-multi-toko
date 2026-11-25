@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import { Copy, ExternalLink, MonitorSmartphone, RefreshCw, ShieldCheck } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { copyText } from '../lib/media.js';
+import { useAuth } from '../state/auth.jsx';
 import { Modal, QRImage, Spinner, useConfirm, useToast } from './ui.jsx';
 
 const isLocalHost = (host) => ['localhost', '127.0.0.1', '[::1]'].includes(host);
 
 /** Pair another device (PC / tablet / HP) as the customer-facing display. */
 export function DisplayDialog({ open, onClose, isAdmin }) {
+  const { activeStoreId } = useAuth();
   const toast = useToast();
   const confirm = useConfirm();
   const [info, setInfo] = useState(null);
@@ -16,10 +18,11 @@ export function DisplayDialog({ open, onClose, isAdmin }) {
 
   useEffect(() => {
     if (!open) return;
+    setInfo(null);
     api('/display')
       .then(setInfo)
       .catch((e) => toast.error(e.message));
-  }, [open, toast]);
+  }, [open, activeStoreId, toast]);
 
   const origins = (() => {
     if (!info) return [];
@@ -53,7 +56,13 @@ export function DisplayDialog({ open, onClose, isAdmin }) {
   };
 
   return (
-    <Modal open={open} onClose={onClose} size="lg" title="Layar Pelanggan" subtitle="Tampilkan pembayaran ke pelanggan secara real-time di perangkat lain.">
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="lg"
+      title={info?.storeName ? `Layar Pelanggan • ${info.storeName}` : 'Layar Pelanggan'}
+      subtitle="Tampilkan pembayaran ke pelanggan secara real-time di perangkat lain."
+    >
       {!info ? (
         <div className="grid place-items-center py-16 text-slate-400"><Spinner className="size-7" /></div>
       ) : (

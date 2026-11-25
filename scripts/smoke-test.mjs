@@ -9,14 +9,17 @@ const BASE = process.argv[2] || 'http://localhost:3999';
 
 function client(clientId) {
   let cookie = '';
-  return async function call(method, path, body) {
+  let storeId = null;
+  const call = async function call(method, path, body, extraHeaders = {}) {
     const res = await fetch(BASE + '/api' + path, {
       method,
       headers: {
         'X-Kasira': '1',
         ...(clientId ? { 'X-Client-Id': clientId } : {}),
+        ...(storeId ? { 'X-Store-Id': String(storeId) } : {}),
         ...(cookie ? { Cookie: cookie } : {}),
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...extraHeaders,
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
@@ -25,6 +28,10 @@ function client(clientId) {
     const data = await res.json().catch(() => null);
     return { status: res.status, data, cookie };
   };
+  call.setStore = (id) => {
+    storeId = id;
+  };
+  return call;
 }
 
 const waitFor = (socket, event, predicate = () => true, ms = 4000) =>
@@ -323,9 +330,148 @@ assert.ok(r.data.recent.some((x) => x.result === 'confirmed' && x.txCode === txA
 const oldPath = r.data.webhookPath;
 r = await admin('POST', '/settings/autoconfirm/regenerate');
 assert.notEqual(r.data.webhookPath, oldPath);
+const sharedWebhook = BASE + r.data.webhookPath;
 n = await notify(BASE + oldPath, 'Rp 1.000 masuk');
 assert.equal(n.status, 404, 'old token stops working after regenerate');
 
+// --- multi-store: create Store #2 copying products & inheriting Pusat (Tetap) QRIS/Bank/Auto-Confirm
+r = await admin('GET', '/stores');
+assert.equal(r.data.stores.length, 1);
+const store1 = r.data.stores[0];
+
+r = await admin('POST', '/stores', {
+  name: 'Kopi Senja Cabang 2',
+  address: 'Jl. Merdeka 2',
+  useSharedQris: true,
+  useSharedBanks: true,
+  useSharedAutoConfirm: true,
+  copyProductsFromStoreId: store1.id,
+});
+assert.equal(r.status, 201, JSON.stringify(r.data));
+const store2 = r.data.store;
+assert.equal(r.data.stores.length, 2);
+
+// Switch admin context to Store #2
+admin.setStore(store2.id);
+r = await admin('GET', '/products');
+assert.equal(r.data.products.length, 2, 'products were copied to Store #2');
+const kopi2 = r.data.products.find((p) => p.name === 'Kopi Susu');
+assert.notEqual(kopi2.id, kopi.id, 'copied product has its own ID');
+
+// Store #2 inherits Pusat QRIS, Bank, and Auto-Confirm
+r = await admin('GET', '/settings');
+assert.equal(r.data.qris.configured, true);
+assert.equal(r.data.qris.useShared, true);
+assert.equal(r.data.banks.length, 1);
+assert.equal(r.data.banksMode.useShared, true);
+assert.equal(r.data.autoConfirm.enabled, true);
+assert.equal(r.data.autoConfirm.useShared, true);
+
+// Store #2 has its own unique customer display key
+r = await admin('GET', '/display');
+const displayKey2 = r.data.key;
+assert.notEqual(displayKey2, displayKey);
+const display2 = io(BASE, { auth: { displayKey: displayKey2 }, reconnection: false });
+const idle2 = await waitFor(display2, 'display:state');
+assert.equal(idle2.store.name, 'Kopi Senja Cabang 2');
+
+// Create karyawan locked to Store #2
+r = await admin('POST', '/users', { name: 'Siti', username: 'siti', password: 'siti1234', role: 'karyawan', storeId: store2.id });
+assert.equal(r.status, 201, JSON.stringify(r.data));
+const sitiUser = r.data.user;
+assert.equal(sitiUser.storeId, store2.id);
+
+const kasir2 = client('dev-kasir-2');
+r = await kasir2('POST', '/auth/login', { username: 'siti', password: 'siti1234' });
+assert.equal(r.status, 200);
+assert.equal(r.data.stores.length, 1);
+assert.equal(r.data.stores[0].id, store2.id);
+
+// Karyawan isolation: siti cannot spoof X-Store-Id to Store #1 or touch Store #1's products/txs
+r = await kasir2('GET', '/products', undefined, { 'X-Store-Id': String(store1.id) });
+assert.equal(r.data.products[0].storeId, store2.id, 'karyawan is strictly locked to assigned store');
+r = await kasir2('POST', '/transactions', { method: 'qris', items: [{ productId: kopi.id, qty: 1 }] });
+assert.equal(r.status, 409, 'Store #2 karyawan cannot ring up Store #1 product ID');
+r = await kasir2('GET', `/transactions/${tx.id}`);
+assert.equal(r.status, 404, 'Store #2 karyawan cannot view Store #1 transaction');
+
+// Shared (Pusat) auto-confirm matches across branches safely
+const pay2Evt = waitFor(display2, 'display:state', (s) => s.phase === 'payment');
+r = await kasir2('POST', '/transactions', { method: 'qris', items: [{ productId: kopi2.id, qty: 2 }] }); // Rp 36.000
+assert.equal(r.status, 201, JSON.stringify(r.data));
+const txS2 = r.data.transaction;
+assert.equal(txS2.storeId, store2.id);
+await pay2Evt;
+
+const success2Evt = waitFor(display2, 'display:state', (s) => s.phase === 'success' && s.transaction.id === txS2.id);
+n = await notify(sharedWebhook, 'DANA Bisnis\nDana masuk Rp 36.000 (cabang 2)');
+assert.equal(n.data.result, 'confirmed', JSON.stringify(n.data));
+assert.equal(n.data.transaction, txS2.code);
+await success2Evt;
+
+// Ambiguous across two branches sharing Pusat auto-confirm: never guesses
+const txS1Amb = await newTx(kopi.id, 1); // Rp 18.000 in Store #1
+const txS2Amb = (await kasir2('POST', '/transactions', { method: 'qris', items: [{ productId: kopi2.id, qty: 1 }] })).data.transaction; // Rp 18.000 in Store #2
+n = await notify(sharedWebhook, 'DANA Bisnis\nTerima Rp 18.000 lintas cabang');
+assert.equal(n.data.result, 'ambiguous', 'same amount pending in two branches must be ambiguous on shared webhook');
+
+// Switch Store #2 to Khusus Toko Ini (dedicated QRIS, Bank, Auto-Confirm)
+r = await admin('PUT', '/settings/payment-mode', { feature: 'qris', useShared: false });
+assert.equal(r.data.qris.useShared, false);
+assert.equal(r.data.qris.configured, false, 'Store #2 has no custom QRIS yet');
+r = await admin('PUT', '/settings/payment-mode', { feature: 'banks', useShared: false });
+assert.equal(r.data.banksMode.useShared, false);
+assert.equal(r.data.banks.length, 0);
+r = await admin('PUT', '/settings/payment-mode', { feature: 'autoconfirm', useShared: false });
+assert.equal(r.data.autoConfirm.useShared, false);
+assert.equal(r.data.autoConfirm.enabled, false);
+
+// Configure dedicated QRIS, Bank, and Auto-Confirm for Store #2
+const body2 =
+  tlv('00', '01') + tlv('01', '11') +
+  tlv('51', tlv('00', 'ID.CO.QRIS.WWW') + tlv('02', 'ID1020021181746') + tlv('03', 'UMI')) +
+  tlv('52', '5812') + tlv('53', '360') + tlv('58', 'ID') + tlv('59', 'CABANG DUA') + tlv('60', 'BANDUNG') + '6304';
+const staticQris2 = body2 + crc16(body2);
+r = await admin('PUT', '/settings/qris', { payload: staticQris2 });
+assert.equal(r.data.qris.merchantName, 'CABANG DUA');
+r = await admin('POST', '/settings/banks', { bankName: 'BRI', accountNumber: '9876543210', accountName: 'Cabang Dua' });
+assert.equal(r.status, 201);
+r = await admin('PUT', '/settings/autoconfirm', { enabled: true, windowMinutes: 30, ignoreWords: 'keluar, debit' });
+const store2Webhook = BASE + r.data.webhookPath;
+assert.notEqual(store2Webhook, sharedWebhook, 'Store #2 has its own dedicated webhook URL');
+
+// Now Rp 18.000 on Store #2's dedicated webhook confirms ONLY txS2Amb (unambiguous within Store #2!)
+n = await notify(store2Webhook, 'GoPay Merchant\nPembayaran Rp 18.000 cabang 2 khusus');
+assert.equal(n.data.result, 'confirmed', JSON.stringify(n.data));
+assert.equal(n.data.transaction, txS2Amb.code);
+assert.equal((await kasir('GET', `/transactions/${txS1Amb.id}`)).data.transaction.status, 'pending', 'Store #1 tx remains untouched');
+await kasir('POST', `/transactions/${txS1Amb.id}/cancel`);
+
+// Verify Store #1 Pusat QRIS & Bank were not affected by Store #2's dedicated settings
+admin.setStore(store1.id);
+r = await admin('GET', '/settings');
+assert.equal(r.data.qris.merchantName, 'KOPI SENJA');
+assert.equal(r.data.banks[0].bankName, 'BCA');
+
+// Combined all-stores history for admin vs store-scoped history for karyawan
+r = await admin('GET', `/transactions?store=all&from=${start.getTime()}&to=${start.getTime() + 864e5}`);
+assert.ok(r.data.transactions.some((t) => t.storeId === store1.id), 'admin all-stores includes Store #1');
+assert.ok(r.data.transactions.some((t) => t.storeId === store2.id), 'admin all-stores includes Store #2');
+r = await kasir2('GET', `/transactions?store=all&from=${start.getTime()}&to=${start.getTime() + 864e5}`);
+assert.ok(r.data.transactions.every((t) => t.storeId === store2.id), 'karyawan cannot bypass store filter with store=all');
+
+// Store deletion guard (blocked while karyawan assigned, allowed after removing karyawan; cannot delete last store)
+r = await admin('DELETE', `/stores/${store2.id}`);
+assert.equal(r.status, 400, 'cannot delete store with assigned karyawan');
+r = await admin('DELETE', `/users/${sitiUser.id}`);
+assert.equal(r.status, 200);
+r = await admin('DELETE', `/stores/${store2.id}`);
+assert.equal(r.status, 200);
+assert.equal(r.data.stores.length, 1);
+r = await admin('DELETE', `/stores/${store1.id}`);
+assert.equal(r.status, 400, 'cannot delete the last remaining store');
+
+display2.close();
 cashierSocket.close();
 display.close();
 staff.close();

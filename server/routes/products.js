@@ -5,13 +5,14 @@ import { Router } from 'express';
 import { db, UPLOAD_DIR } from '../db.js';
 import { requireAuth, requireAdmin } from '../auth.js';
 import { serializeProduct } from '../data.js';
-import { emitToStaff, refreshDisplayCart } from '../realtime.js';
-
-function productsChanged() {
-  emitToStaff('products:changed');
-  refreshDisplayCart();
-}
+import { emitToStaff, emitStoresChanged, refreshDisplayCart } from '../realtime.js';
 import { httpError, str, int, parseId } from '../util.js';
+
+function productsChanged(storeId) {
+  emitToStaff(storeId, 'products:changed');
+  refreshDisplayCart(storeId);
+  emitStoresChanged();
+}
 
 const MAX_PRICE = 1_000_000_000;
 const MAX_IMAGE_BYTES = 1.5 * 1024 * 1024;
@@ -52,13 +53,13 @@ function readProductInput(body) {
   };
 }
 
-const listStmt = db.prepare('SELECT * FROM products ORDER BY category COLLATE NOCASE, name COLLATE NOCASE');
-const getStmt = db.prepare('SELECT * FROM products WHERE id = ?');
+const listStmt = db.prepare('SELECT * FROM products WHERE store_id = ? ORDER BY category COLLATE NOCASE, name COLLATE NOCASE');
+const getStmt = db.prepare('SELECT * FROM products WHERE id = ? AND store_id = ?');
 
 const router = Router();
 
-router.get('/', requireAuth, (_req, res) => {
-  res.json({ products: listStmt.all().map(serializeProduct) });
+router.get('/', requireAuth, (req, res) => {
+  res.json({ products: listStmt.all(req.storeId).map(serializeProduct) });
 });
 
 router.post('/', requireAdmin, (req, res) => {
@@ -66,16 +67,16 @@ router.post('/', requireAdmin, (req, res) => {
   const image = req.body?.image ? saveImage(req.body.image) : null;
   const now = Date.now();
   const info = db
-    .prepare('INSERT INTO products (name, price, category, image, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(input.name, input.price, input.category, image, now, now);
-  const product = serializeProduct(getStmt.get(Number(info.lastInsertRowid)));
-  productsChanged();
+    .prepare('INSERT INTO products (store_id, name, price, category, image, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(req.storeId, input.name, input.price, input.category, image, now, now);
+  const product = serializeProduct(getStmt.get(Number(info.lastInsertRowid), req.storeId));
+  productsChanged(req.storeId);
   res.status(201).json({ product });
 });
 
 router.put('/:id', requireAdmin, (req, res) => {
   const id = parseId(req.params.id);
-  const existing = getStmt.get(id);
+  const existing = getStmt.get(id, req.storeId);
   if (!existing) throw httpError(404, 'Produk tidak ditemukan');
   const input = readProductInput(req.body);
 
@@ -84,21 +85,21 @@ router.put('/:id', requireAdmin, (req, res) => {
   if (req.body?.image === null || req.body?.image === '') image = null;
   else if (typeof req.body?.image === 'string' && req.body.image.startsWith('data:')) image = saveImage(req.body.image);
 
-  db.prepare('UPDATE products SET name = ?, price = ?, category = ?, image = ?, updated_at = ? WHERE id = ?').run(
-    input.name, input.price, input.category, image, Date.now(), id
+  db.prepare('UPDATE products SET name = ?, price = ?, category = ?, image = ?, updated_at = ? WHERE id = ? AND store_id = ?').run(
+    input.name, input.price, input.category, image, Date.now(), id, req.storeId
   );
   if (image !== existing.image) removeImage(existing.image);
-  productsChanged();
-  res.json({ product: serializeProduct(getStmt.get(id)) });
+  productsChanged(req.storeId);
+  res.json({ product: serializeProduct(getStmt.get(id, req.storeId)) });
 });
 
 router.delete('/:id', requireAdmin, (req, res) => {
   const id = parseId(req.params.id);
-  const existing = getStmt.get(id);
+  const existing = getStmt.get(id, req.storeId);
   if (!existing) throw httpError(404, 'Produk tidak ditemukan');
-  db.prepare('DELETE FROM products WHERE id = ?').run(id);
+  db.prepare('DELETE FROM products WHERE id = ? AND store_id = ?').run(id, req.storeId);
   removeImage(existing.image);
-  productsChanged();
+  productsChanged(req.storeId);
   res.json({ ok: true });
 });
 

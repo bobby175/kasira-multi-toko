@@ -1,11 +1,11 @@
 import { Router } from 'express';
-import { db, inTransaction, setSetting } from '../db.js';
+import { db, inTransaction } from '../db.js';
 import {
   hashPassword, verifyPassword, createSession, deleteSession, setSessionCookie,
   clearSessionCookie, rateLimit, resetRateLimit, requireAuth,
 } from '../auth.js';
 import { disconnectSession } from '../realtime.js';
-import { getStoreSettings } from '../data.js';
+import { createStoreRecord, getStoreRowStrict, getStoreSettings, listStores, serializeStore } from '../data.js';
 import { httpError, str } from '../util.js';
 
 export const USERNAME_RULE = {
@@ -22,13 +22,21 @@ export function validatePassword(password) {
 const countUsers = db.prepare('SELECT COUNT(*) AS n FROM users');
 const findUserByUsername = db.prepare('SELECT * FROM users WHERE username = ?');
 
+function storesForUser(user) {
+  if (!user) return [];
+  if (user.role === 'admin') return listStores();
+  const store = getStoreRowStrict(user.storeId);
+  return store ? [serializeStore(store)] : [];
+}
+
 const router = Router();
 
 router.get('/bootstrap', (req, res) => {
   res.json({
     needsSetup: countUsers.get().n === 0,
     user: req.user,
-    storeName: getStoreSettings().name,
+    stores: storesForUser(req.user),
+    storeName: getStoreSettings(req.storeId).name,
   });
 });
 
@@ -42,15 +50,18 @@ router.post('/setup', (req, res) => {
 
   const userId = inTransaction(() => {
     if (countUsers.get().n > 0) throw httpError(409, 'Setup awal sudah pernah dilakukan.');
-    setSetting('store_name', storeName);
+    createStoreRecord({ name: storeName });
     const info = db
-      .prepare('INSERT INTO users (name, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)')
+      .prepare('INSERT INTO users (name, username, password_hash, role, store_id, created_at) VALUES (?, ?, ?, ?, NULL, ?)')
       .run(name, username, hashPassword(password), 'admin', Date.now());
     return Number(info.lastInsertRowid);
   });
 
   setSessionCookie(req, res, createSession(userId));
-  res.status(201).json({ user: { id: userId, name, username, role: 'admin' } });
+  res.status(201).json({
+    user: { id: userId, name, username, role: 'admin', storeId: null },
+    stores: listStores(),
+  });
 });
 
 router.post('/auth/login', (req, res) => {
@@ -64,10 +75,14 @@ router.post('/auth/login', (req, res) => {
   const ok = verifyPassword(password, user?.password_hash);
   if (!user || !ok) throw httpError(401, 'Username atau kata sandi salah.');
   if (!user.active) throw httpError(403, 'Akun ini dinonaktifkan. Hubungi admin.');
+  if (user.role === 'karyawan' && !getStoreRowStrict(user.store_id)) {
+    throw httpError(403, 'Toko yang ditugaskan tidak ditemukan. Hubungi admin.');
+  }
 
   resetRateLimit(limitKey);
   setSessionCookie(req, res, createSession(user.id));
-  res.json({ user: { id: user.id, name: user.name, username: user.username, role: user.role } });
+  const payloadUser = { id: user.id, name: user.name, username: user.username, role: user.role, storeId: user.store_id ?? null };
+  res.json({ user: payloadUser, stores: storesForUser(payloadUser) });
 });
 
 router.post('/auth/logout', (req, res) => {
@@ -80,7 +95,7 @@ router.post('/auth/logout', (req, res) => {
 });
 
 router.get('/auth/me', requireAuth, (req, res) => {
-  res.json({ user: req.user });
+  res.json({ user: req.user, stores: storesForUser(req.user) });
 });
 
 export default router;

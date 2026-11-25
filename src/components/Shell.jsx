@@ -1,12 +1,14 @@
 import { useState } from 'react';
-import { History, LayoutGrid, LogOut, Minimize, MonitorSmartphone, Package, Settings, Smartphone, Wallet } from 'lucide-react';
-import { Link, usePathname } from '../lib/router.jsx';
+import {
+  Check, ChevronsUpDown, History, LayoutGrid, LogOut, Minimize, MonitorSmartphone, Package, Plus, Settings, Smartphone, Store, Wallet,
+} from 'lucide-react';
+import { Link, navigate, usePathname } from '../lib/router.jsx';
 import { ROLE_LABEL } from '../lib/format.js';
 import { canLockLandscape, enterLandscape, exitFullscreen, useIsFullscreen } from '../lib/screen.js';
 import { useAuth } from '../state/auth.jsx';
 import { useData } from '../state/data.jsx';
 import { DisplayDialog } from './DisplayDialog.jsx';
-import { Avatar, Logo, LogoMark, useConfirm } from './ui.jsx';
+import { Avatar, Logo, LogoMark, Modal, useConfirm } from './ui.jsx';
 
 export function useNavItems() {
   const { user } = useAuth();
@@ -72,12 +74,71 @@ function LandscapeToggle({ className = '', iconClass = 'size-5' }) {
   );
 }
 
-function Sidebar({ onOpenDisplay }) {
+function StoreSwitcherModal({ open, onClose }) {
+  const { stores, activeStoreId, selectStore } = useAuth();
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="sm"
+      title="Pilih Toko / Cabang"
+      subtitle="Berpindah toko mengganti produk, keranjang, transaksi, dan layar pelanggan aktif."
+      footer={
+        <button
+          type="button"
+          className="btn btn-secondary w-full"
+          onClick={() => {
+            onClose();
+            navigate('/pengaturan');
+          }}
+        >
+          <Plus className="size-4" /> Kelola / Tambah Toko di Pengaturan
+        </button>
+      }
+    >
+      <ul className="space-y-2">
+        {stores.map((s) => {
+          const active = s.id === activeStoreId;
+          return (
+            <li key={s.id}>
+              <button
+                type="button"
+                onClick={() => {
+                  selectStore(s.id);
+                  onClose();
+                }}
+                className={`flex w-full items-center gap-3 rounded-2xl border p-3.5 text-left transition ${
+                  active ? 'border-brand-500 bg-brand-50 ring-2 ring-brand-500/20' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                <span className={`grid size-10 shrink-0 place-items-center rounded-xl ${active ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                  <Store className="size-5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-bold text-slate-900">{s.name}</span>
+                  <span className="block truncate text-xs text-slate-500">
+                    {s.counts ? `${s.counts.products} produk • ${s.counts.staff} karyawan` : s.address || 'Toko aktif'}
+                    {s.counts?.pending > 0 ? ` • ${s.counts.pending} menunggu` : ''}
+                  </span>
+                </span>
+                {active && <Check className="size-5 shrink-0 text-brand-600" />}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </Modal>
+  );
+}
+
+function Sidebar({ onOpenDisplay, onOpenStores }) {
   const path = usePathname();
   const items = useNavItems();
-  const { user } = useAuth();
-  const { connected } = useData();
+  const { user, activeStore, stores } = useAuth();
+  const { connected, settings } = useData();
   const handleLogout = useLogout();
+  const isAdmin = user.role === 'admin';
+  const storeLabel = settings.store.name || activeStore?.name || 'Toko';
 
   return (
     <aside className="sticky top-0 hidden h-dvh w-[84px] shrink-0 flex-col bg-brand-950 text-slate-400 wide:flex xl:w-64 short:w-[calc(64px+env(safe-area-inset-left))] short:pl-[env(safe-area-inset-left)]">
@@ -94,7 +155,34 @@ function Sidebar({ onOpenDisplay }) {
         </span>
         <Logo dark className="hidden xl:flex short:hidden" />
       </div>
-      <nav className="scrollbar-none relative mt-2 flex min-h-0 flex-1 flex-col gap-1.5 px-3 short:mt-0 short:gap-1 short:overflow-y-auto short:px-2">
+      <div className="relative mb-2 px-3 short:mb-1 short:px-2">
+        {isAdmin ? (
+          <button
+            type="button"
+            onClick={onOpenStores}
+            title={`Toko aktif: ${storeLabel} (klik untuk ganti)`}
+            className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-white/[0.06] px-3 py-2.5 text-left text-white ring-1 ring-white/10 transition hover:bg-white/10 xl:justify-start short:justify-center short:rounded-xl short:py-2"
+          >
+            <Store className="size-5 shrink-0 text-brand-300" />
+            <span className="hidden min-w-0 flex-1 xl:block short:hidden">
+              <span className="block truncate text-xs font-bold text-white">{storeLabel}</span>
+              <span className="block text-[11px] text-slate-400">
+                {stores.length > 1 ? `${stores.length} toko • Ganti` : 'Ganti / Tambah toko'}
+              </span>
+            </span>
+            <ChevronsUpDown className="hidden size-4 shrink-0 text-slate-400 xl:block short:hidden" />
+          </button>
+        ) : (
+          <div
+            title={`Toko: ${storeLabel}`}
+            className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-white/[0.04] px-3 py-2 text-left text-slate-300 ring-1 ring-white/5 xl:justify-start short:hidden"
+          >
+            <Store className="size-4 shrink-0 text-brand-300" />
+            <span className="hidden truncate text-xs font-semibold xl:block">{storeLabel}</span>
+          </div>
+        )}
+      </div>
+      <nav className="scrollbar-none relative mt-1 flex min-h-0 flex-1 flex-col gap-1.5 px-3 short:mt-0 short:gap-1 short:overflow-y-auto short:px-2">
         {items.map(({ to, label, icon: Icon, badge }) => {
           const active = to === '/' ? path === '/' : path.startsWith(to);
           return (
@@ -154,19 +242,36 @@ function Sidebar({ onOpenDisplay }) {
   );
 }
 
-function MobileTopBar({ onOpenDisplay }) {
-  const { user } = useAuth();
+function MobileTopBar({ onOpenDisplay, onOpenStores }) {
+  const { user, activeStore } = useAuth();
   const { connected, settings } = useData();
   const handleLogout = useLogout();
+  const isAdmin = user.role === 'admin';
+  const storeLabel = settings.store.name || activeStore?.name || 'Kasira';
+
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-white/5 bg-brand-950/95 px-4 text-white backdrop-blur wide:hidden">
       <LogoMark className="size-8" />
-      <div className="ml-1 min-w-0 flex-1 leading-tight">
-        <div className="truncate text-sm font-bold">{settings.store.name || 'Kasira'}</div>
-        <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-          <ConnectionDot connected={connected} /> <span className="truncate">{user.name} • {ROLE_LABEL[user.role]}</span>
+      {isAdmin ? (
+        <button type="button" onClick={onOpenStores} className="ml-1 flex min-w-0 flex-1 items-center gap-1.5 text-left leading-tight">
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-1 truncate text-sm font-bold">
+              <span className="truncate">{storeLabel}</span>
+              <ChevronsUpDown className="size-3.5 shrink-0 text-brand-300" />
+            </span>
+            <span className="flex items-center gap-1.5 text-[11px] text-slate-400">
+              <ConnectionDot connected={connected} /> <span className="truncate">{user.name} • {ROLE_LABEL[user.role]}</span>
+            </span>
+          </span>
+        </button>
+      ) : (
+        <div className="ml-1 min-w-0 flex-1 leading-tight">
+          <div className="truncate text-sm font-bold">{storeLabel}</div>
+          <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+            <ConnectionDot connected={connected} /> <span className="truncate">{user.name} • {ROLE_LABEL[user.role]}</span>
+          </div>
         </div>
-      </div>
+      )}
       <LandscapeToggle className="rounded-xl p-2 text-slate-300 hover:bg-white/10" />
       <button type="button" onClick={onOpenDisplay} className="rounded-xl p-2 text-slate-300 hover:bg-white/10" aria-label="Layar Pelanggan">
         <MonitorSmartphone className="size-5" />
@@ -208,15 +313,17 @@ function MobileBottomNav() {
 export function Shell({ children }) {
   const { user } = useAuth();
   const [displayOpen, setDisplayOpen] = useState(false);
+  const [storesOpen, setStoresOpen] = useState(false);
   return (
     <div className="flex min-h-dvh">
-      <Sidebar onOpenDisplay={() => setDisplayOpen(true)} />
+      <Sidebar onOpenDisplay={() => setDisplayOpen(true)} onOpenStores={() => setStoresOpen(true)} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <MobileTopBar onOpenDisplay={() => setDisplayOpen(true)} />
+        <MobileTopBar onOpenDisplay={() => setDisplayOpen(true)} onOpenStores={() => setStoresOpen(true)} />
         <main className="min-w-0 flex-1 pb-[calc(4rem+env(safe-area-inset-bottom))] wide:pb-0">{children}</main>
         <MobileBottomNav />
       </div>
       <DisplayDialog open={displayOpen} onClose={() => setDisplayOpen(false)} isAdmin={user.role === 'admin'} />
+      {user.role === 'admin' && <StoreSwitcherModal open={storesOpen} onClose={() => setStoresOpen(false)} />}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  BellRing, CheckCircle2, ClipboardPaste, ImageUp, Landmark, Pencil, Plus, QrCode, Store, Trash2, UserPlus, Users,
+  BellRing, Building2, Check, CheckCircle2, ClipboardPaste, Globe, ImageUp, Landmark, Pencil, Plus, QrCode, Store, Trash2, UserPlus, Users,
 } from 'lucide-react';
 import { AutoConfirmSettings } from './AutoConfirm.jsx';
 import { api } from '../lib/api.js';
@@ -13,7 +13,7 @@ import { AdminOnly } from './Products.jsx';
 import { Avatar, EmptyState, Modal, QRImage, Spinner, useConfirm, useToast } from '../components/ui.jsx';
 
 const TABS = [
-  { id: 'toko', label: 'Toko & Struk', icon: Store },
+  { id: 'toko', label: 'Toko & Cabang', icon: Store },
   { id: 'qris', label: 'QRIS', icon: QrCode },
   { id: 'bank', label: 'Rekening Bank', icon: Landmark },
   { id: 'otomatis', label: 'Konfirmasi Otomatis', icon: BellRing },
@@ -35,22 +35,25 @@ function Section({ title, description, children, action }) {
   );
 }
 
-// ---------- Store ----------
-
-function StoreSettings() {
-  const { settings, setSettings } = useData();
+/** Switcher between Shared (Pusat / Tetap) vs Store-specific payment configuration. */
+function PaymentModeSwitch({ feature, useShared, storeName, sharedHint, storeHint, onChanged }) {
+  const { setSettings } = useData();
+  const { refreshStores } = useAuth();
   const toast = useToast();
-  const [form, setForm] = useState(settings.store);
   const [busy, setBusy] = useState(false);
-  useEffect(() => setForm(settings.store), [settings.store]);
 
-  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
-  const submit = async (e) => {
-    e.preventDefault();
+  const toggle = async (nextShared) => {
+    if (nextShared === useShared || busy) return;
     setBusy(true);
     try {
-      setSettings(await api('/settings/store', { method: 'PUT', body: form }));
-      toast.success('Pengaturan toko disimpan');
+      const updated = await api('/settings/payment-mode', {
+        method: 'PUT',
+        body: { feature, useShared: nextShared },
+      });
+      setSettings(updated);
+      refreshStores().catch(() => {});
+      onChanged?.(nextShared, updated);
+      toast.success(nextShared ? 'Menggunakan pengaturan pusat (tetap)' : `Menggunakan pengaturan khusus ${storeName || 'toko ini'}`);
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -59,39 +62,309 @@ function StoreSettings() {
   };
 
   return (
-    <Section title="Toko & Struk" description="Ditampilkan di layar pelanggan dan bukti transaksi.">
-      <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
-        <div className="sm:col-span-2">
-          <label className="label" htmlFor="s-name">Nama toko</label>
-          <input id="s-name" className="input" value={form.name} onChange={set('name')} required maxLength={60} />
+    <div className="mb-5 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
+      <div className="mb-2.5 flex items-center justify-between gap-2">
+        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Mode Pengaturan</span>
+        {busy && <Spinner className="size-4 text-brand-600" />}
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => toggle(true)}
+          className={`flex items-start gap-3 rounded-xl border p-3 text-left transition ${
+            useShared ? 'border-brand-500 bg-white ring-2 ring-brand-500/20' : 'border-slate-200 bg-white/60 hover:border-slate-300'
+          }`}
+        >
+          <span className={`grid size-9 shrink-0 place-items-center rounded-lg ${useShared ? 'bg-brand-600 text-white' : 'bg-slate-200 text-slate-500'}`}>
+            <Globe className="size-4" />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-bold text-slate-900">Ikut Pusat (Tetap)</span>
+            <span className="block text-xs text-slate-500">Dipakai bersama semua cabang yang memilih opsi ini</span>
+          </span>
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => toggle(false)}
+          className={`flex items-start gap-3 rounded-xl border p-3 text-left transition ${
+            !useShared ? 'border-brand-500 bg-white ring-2 ring-brand-500/20' : 'border-slate-200 bg-white/60 hover:border-slate-300'
+          }`}
+        >
+          <span className={`grid size-9 shrink-0 place-items-center rounded-lg ${!useShared ? 'bg-brand-600 text-white' : 'bg-slate-200 text-slate-500'}`}>
+            <Building2 className="size-4" />
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-bold text-slate-900">Khusus {storeName || 'Toko Ini'}</span>
+            <span className="block text-xs text-slate-500">Terpisah dan tidak memengaruhi toko lain</span>
+          </span>
+        </button>
+      </div>
+      <p className="mt-2.5 text-xs text-slate-600">{useShared ? sharedHint : storeHint}</p>
+    </div>
+  );
+}
+
+// ---------- Stores & Multi-Branch ----------
+
+function CreateStoreModal({ onClose }) {
+  const { stores, activeStoreId, setStores } = useAuth();
+  const toast = useToast();
+  const [form, setForm] = useState({
+    name: '',
+    address: '',
+    phone: '',
+    footer: 'Terima kasih atas kunjungan Anda!',
+    paperWidth: 58,
+    useSharedQris: true,
+    useSharedBanks: true,
+    useSharedAutoConfirm: true,
+    copyProductsFromStoreId: '',
+  });
+  const [busy, setBusy] = useState(false);
+
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const setCheck = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.checked }));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const payload = {
+        ...form,
+        copyProductsFromStoreId: form.copyProductsFromStoreId ? Number(form.copyProductsFromStoreId) : null,
+      };
+      const data = await api('/stores', { method: 'POST', body: payload });
+      setStores(data.stores, data.store.id);
+      toast.success(`Toko "${data.store.name}" ditambahkan dan diaktifkan`);
+      onClose();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Tambah Toko / Cabang Baru"
+      subtitle="Produk, layar pelanggan, karyawan, dan riwayat transaksi terpisah per toko."
+      size="md"
+      footer={
+        <div className="flex justify-end gap-3">
+          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={busy}>Batal</button>
+          <button type="submit" form="create-store-form" className="btn btn-primary" disabled={busy}>
+            {busy && <Spinner className="size-4" />} Buat Toko
+          </button>
         </div>
-        <div className="sm:col-span-2">
-          <label className="label" htmlFor="s-addr">Alamat</label>
-          <input id="s-addr" className="input" value={form.address} onChange={set('address')} maxLength={160} placeholder="Jl. ..." />
+      }
+    >
+      <form id="create-store-form" onSubmit={submit} className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label className="label" htmlFor="ns-name">Nama toko / cabang</label>
+            <input id="ns-name" className="input" value={form.name} onChange={set('name')} required maxLength={60} autoFocus placeholder="contoh: Kopi Senja Cabang 2" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label" htmlFor="ns-addr">Alamat</label>
+            <input id="ns-addr" className="input" value={form.address} onChange={set('address')} maxLength={160} placeholder="Jl. ..." />
+          </div>
+          <div>
+            <label className="label" htmlFor="ns-phone">Telepon / WhatsApp</label>
+            <input id="ns-phone" className="input" value={form.phone} onChange={set('phone')} maxLength={30} inputMode="tel" />
+          </div>
+          <div>
+            <span className="label">Lebar kertas struk</span>
+            <div className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
+              {[58, 80].map((w) => (
+                <button key={w} type="button" onClick={() => setForm((f) => ({ ...f, paperWidth: w }))} className={`rounded-lg py-2 text-sm font-bold transition ${form.paperWidth === w ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}>
+                  {w} mm
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label" htmlFor="ns-copy">Salin daftar produk dari toko lain (opsional)</label>
+            <select id="ns-copy" className="input" value={form.copyProductsFromStoreId} onChange={set('copyProductsFromStoreId')}>
+              <option value="">Mulai kosong (tanpa produk)</option>
+              {stores.map((s) => (
+                <option key={s.id} value={s.id}>
+                  Salin dari {s.name}{s.id === activeStoreId ? ' (aktif)' : ''}{s.counts ? ` (${s.counts.products} produk)` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div>
-          <label className="label" htmlFor="s-phone">Telepon / WhatsApp</label>
-          <input id="s-phone" className="input" value={form.phone} onChange={set('phone')} maxLength={30} inputMode="tel" />
-        </div>
-        <div>
-          <span className="label">Lebar kertas struk</span>
-          <div className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
-            {[58, 80].map((w) => (
-              <button key={w} type="button" onClick={() => setForm((f) => ({ ...f, paperWidth: w }))} className={`rounded-lg py-2 text-sm font-bold transition ${form.paperWidth === w ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}>
-                {w} mm
-              </button>
+
+        <div className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
+          <div className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Pembayaran & Notifikasi</div>
+          <div className="space-y-2.5 text-sm">
+            {[
+              { key: 'useSharedQris', label: 'QRIS ikut Pusat (tetap)', desc: 'Matikan jika cabang ini punya QRIS sendiri.' },
+              { key: 'useSharedBanks', label: 'Rekening bank ikut Pusat (tetap)', desc: 'Matikan jika cabang ini pakai rekening terpisah.' },
+              { key: 'useSharedAutoConfirm', label: 'Konfirmasi otomatis ikut Pusat (tetap)', desc: 'Matikan jika cabang ini pakai HP/webhook MacroDroid sendiri.' },
+            ].map((item) => (
+              <label key={item.key} className="flex cursor-pointer items-start justify-between gap-3">
+                <span>
+                  <span className="block font-semibold text-slate-800">{item.label}</span>
+                  <span className="block text-xs text-slate-500">{item.desc}</span>
+                </span>
+                <input type="checkbox" className="mt-1 size-5 shrink-0 accent-brand-600" checked={form[item.key]} onChange={setCheck(item.key)} />
+              </label>
             ))}
           </div>
         </div>
-        <div className="sm:col-span-2">
-          <label className="label" htmlFor="s-footer">Catatan bawah struk</label>
-          <input id="s-footer" className="input" value={form.footer} onChange={set('footer')} maxLength={160} />
-        </div>
-        <div className="sm:col-span-2">
-          <button type="submit" className="btn btn-primary" disabled={busy}>{busy && <Spinner className="size-4" />} Simpan</button>
-        </div>
       </form>
-    </Section>
+    </Modal>
+  );
+}
+
+function StoreSettings() {
+  const { stores, activeStoreId, selectStore, setStores, refreshStores } = useAuth();
+  const { settings, setSettings } = useData();
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [form, setForm] = useState(settings.store);
+  const [busy, setBusy] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => setForm(settings.store), [settings.store]);
+
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      setSettings(await api('/settings/store', { method: 'PUT', body: form }));
+      refreshStores().catch(() => {});
+      toast.success('Pengaturan toko disimpan');
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeStore = async (store) => {
+    const ok = await confirm({
+      title: `Hapus toko “${store.name}”?`,
+      message: 'Semua produk, riwayat transaksi, dan pengaturan khusus toko ini akan dihapus permanen. Karyawan di toko ini harus dipindahkan atau dihapus lebih dulu.',
+      confirmLabel: 'Hapus Toko',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      const data = await api(`/stores/${store.id}`, { method: 'DELETE' });
+      setStores(data.stores);
+      toast.success(`Toko "${store.name}" dihapus`);
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <Section
+        title="Daftar Toko / Cabang"
+        description="Kelola banyak cabang dalam satu server. Produk, transaksi, layar pelanggan, dan karyawan terpisah per toko; sedangkan QRIS, rekening, dan konfirmasi otomatis bisa dibuat tetap (pusat) atau khusus per toko."
+        action={
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => setCreating(true)}>
+            <Plus className="size-4" /> Tambah Toko
+          </button>
+        }
+      >
+        <ul className="divide-y divide-slate-100 rounded-2xl ring-1 ring-slate-200">
+          {stores.map((s) => {
+            const active = s.id === activeStoreId;
+            return (
+              <li key={s.id} className={`flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center ${active ? 'bg-brand-50/50' : ''}`}>
+                <div className="flex min-w-0 flex-1 items-start gap-3">
+                  <span className={`grid size-10 shrink-0 place-items-center rounded-xl ${active ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                    <Store className="size-5" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate font-bold text-slate-900">{s.name}</span>
+                      {active && <span className="pill bg-brand-100 text-brand-700"><Check className="size-3" /> Aktif</span>}
+                    </div>
+                    <div className="mt-0.5 text-xs text-slate-500">
+                      {s.counts ? `${s.counts.products} produk • ${s.counts.staff} karyawan` : ''}
+                      {s.counts?.pending > 0 ? ` • ${s.counts.pending} menunggu` : ''}
+                      {s.address ? ` • ${s.address}` : ''}
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      <span className={`pill text-[11px] ${s.useSharedQris ? 'bg-slate-100 text-slate-600' : 'bg-indigo-50 text-indigo-700'}`}>
+                        QRIS: {s.useSharedQris ? 'Pusat' : 'Khusus'}
+                      </span>
+                      <span className={`pill text-[11px] ${s.useSharedBanks ? 'bg-slate-100 text-slate-600' : 'bg-indigo-50 text-indigo-700'}`}>
+                        Bank: {s.useSharedBanks ? 'Pusat' : 'Khusus'}
+                      </span>
+                      <span className={`pill text-[11px] ${s.useSharedAutoConfirm ? 'bg-slate-100 text-slate-600' : 'bg-indigo-50 text-indigo-700'}`}>
+                        Otomatis: {s.useSharedAutoConfirm ? 'Pusat' : 'Khusus'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {!active && (
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => selectStore(s.id)}>
+                      Buka Toko
+                    </button>
+                  )}
+                  {stores.length > 1 && (
+                    <button type="button" className="btn-icon size-9 hover:text-rose-600" onClick={() => removeStore(s)} aria-label="Hapus toko" title="Hapus toko">
+                      <Trash2 className="size-4" />
+                    </button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </Section>
+
+      <Section
+        title={`Detail & Struk • ${settings.store.name || 'Toko Aktif'}`}
+        description="Ditampilkan di layar pelanggan dan bukti transaksi untuk toko yang sedang aktif."
+      >
+        <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label className="label" htmlFor="s-name">Nama toko</label>
+            <input id="s-name" className="input" value={form.name || ''} onChange={set('name')} required maxLength={60} />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label" htmlFor="s-addr">Alamat</label>
+            <input id="s-addr" className="input" value={form.address || ''} onChange={set('address')} maxLength={160} placeholder="Jl. ..." />
+          </div>
+          <div>
+            <label className="label" htmlFor="s-phone">Telepon / WhatsApp</label>
+            <input id="s-phone" className="input" value={form.phone || ''} onChange={set('phone')} maxLength={30} inputMode="tel" />
+          </div>
+          <div>
+            <span className="label">Lebar kertas struk</span>
+            <div className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
+              {[58, 80].map((w) => (
+                <button key={w} type="button" onClick={() => setForm((f) => ({ ...f, paperWidth: w }))} className={`rounded-lg py-2 text-sm font-bold transition ${form.paperWidth === w ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}>
+                  {w} mm
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label" htmlFor="s-footer">Catatan bawah struk</label>
+            <input id="s-footer" className="input" value={form.footer || ''} onChange={set('footer')} maxLength={160} />
+          </div>
+          <div className="sm:col-span-2">
+            <button type="submit" className="btn btn-primary" disabled={busy}>{busy && <Spinner className="size-4" />} Simpan</button>
+          </div>
+        </form>
+      </Section>
+
+      {creating && <CreateStoreModal onClose={() => setCreating(false)} />}
+    </div>
   );
 }
 
@@ -106,6 +379,7 @@ function QrisSettings() {
   const [paste, setPaste] = useState('');
   const [showPaste, setShowPaste] = useState(false);
   const [busy, setBusy] = useState(false);
+  const useShared = settings.qris?.useShared ?? true;
 
   const analyze = async (payload) => {
     setBusy(true);
@@ -166,11 +440,21 @@ function QrisSettings() {
       title="QRIS"
       description="Unggah QRIS statis toko Anda (stiker/gambar dari aplikasi merchant). Kasira otomatis mengubahnya menjadi QRIS dinamis berisi nominal setiap transaksi, jadi pelanggan tidak perlu mengetik nominal."
     >
+      <PaymentModeSwitch
+        feature="qris"
+        useShared={useShared}
+        storeName={settings.store.name}
+        sharedHint="QRIS Pusat (Tetap): perubahan di sini berlaku untuk semua toko yang memilih opsi Pusat."
+        storeHint={`QRIS Khusus ${settings.store.name}: hanya dipakai oleh cabang ini dan tidak mengubah QRIS Pusat.`}
+      />
+
       {settings.qris.configured ? (
         <div className="mb-5 flex items-center gap-4 rounded-2xl bg-emerald-50 p-4 ring-1 ring-emerald-200">
           <CheckCircle2 className="size-8 shrink-0 text-emerald-600" />
           <div className="min-w-0 flex-1">
-            <div className="font-bold text-emerald-900">QRIS aktif: {settings.qris.merchantName}</div>
+            <div className="font-bold text-emerald-900">
+              QRIS aktif ({useShared ? 'Pusat' : settings.store.name}): {settings.qris.merchantName}
+            </div>
             <div className="text-sm text-emerald-800">
               {settings.qris.merchantCity}{settings.qris.nmid ? ` • NMID: ${settings.qris.nmid}` : ''}
             </div>
@@ -178,7 +462,9 @@ function QrisSettings() {
           <button type="button" className="btn btn-danger btn-sm" onClick={remove}><Trash2 className="size-4" /> Hapus</button>
         </div>
       ) : (
-        <div className="mb-5 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-amber-200">QRIS belum diatur. Pembayaran QRIS belum bisa dipakai.</div>
+        <div className="mb-5 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-amber-200">
+          QRIS ({useShared ? 'Pusat' : settings.store.name}) belum diatur. Pembayaran QRIS belum bisa dipakai.
+        </div>
       )}
 
       <div className="flex flex-wrap gap-2">
@@ -284,6 +570,7 @@ function BankSettings() {
   const toast = useToast();
   const confirm = useConfirm();
   const [editing, setEditing] = useState(null);
+  const useShared = settings.banksMode?.useShared ?? true;
 
   const remove = async (bank) => {
     if (!(await confirm({ title: `Hapus rekening ${bank.bankName}?`, confirmLabel: 'Hapus', tone: 'danger' }))) return;
@@ -300,8 +587,16 @@ function BankSettings() {
       description="Ditampilkan ke pelanggan saat memilih pembayaran transfer."
       action={<button type="button" className="btn btn-primary btn-sm" onClick={() => setEditing('new')}><Plus className="size-4" /> Tambah</button>}
     >
+      <PaymentModeSwitch
+        feature="banks"
+        useShared={useShared}
+        storeName={settings.store.name}
+        sharedHint="Rekening Pusat (Tetap): daftar rekening ini dipakai bersama oleh semua toko yang memilih opsi Pusat."
+        storeHint={`Rekening Khusus ${settings.store.name}: hanya ditampilkan di cabang ini dan tidak mengubah Rekening Pusat.`}
+      />
+
       {settings.banks.length === 0 ? (
-        <EmptyState icon={Landmark} title="Belum ada rekening" description="Tambahkan minimal satu rekening untuk menerima transfer." />
+        <EmptyState icon={Landmark} title="Belum ada rekening" description={`Tambahkan minimal satu rekening (${useShared ? 'Pusat' : settings.store.name}) untuk menerima transfer.`} />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {settings.banks.map((bank) => (
@@ -326,8 +621,16 @@ function BankSettings() {
 // ---------- Users ----------
 
 function UserForm({ user, onClose, onSaved, isSelf }) {
+  const { stores, activeStoreId } = useAuth();
   const toast = useToast();
-  const [form, setForm] = useState({ name: user?.name ?? '', username: user?.username ?? '', password: '', role: user?.role ?? 'karyawan', active: user?.active ?? true });
+  const [form, setForm] = useState({
+    name: user?.name ?? '',
+    username: user?.username ?? '',
+    password: '',
+    role: user?.role ?? 'karyawan',
+    storeId: user?.storeId ?? activeStoreId ?? stores[0]?.id ?? '',
+    active: user?.active ?? true,
+  });
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -337,6 +640,8 @@ function UserForm({ user, onClose, onSaved, isSelf }) {
     try {
       const body = { ...form };
       if (user && !body.password) delete body.password;
+      if (body.role === 'admin') delete body.storeId;
+      else body.storeId = Number(body.storeId);
       await api(user ? `/users/${user.id}` : '/users', { method: user ? 'PUT' : 'POST', body });
       toast.success(user ? 'Pengguna diperbarui' : 'Pengguna ditambahkan');
       onSaved();
@@ -368,8 +673,8 @@ function UserForm({ user, onClose, onSaved, isSelf }) {
           <span className="label">Peran</span>
           <div className="grid grid-cols-2 gap-2">
             {[
-              { id: 'karyawan', desc: 'Jual & konfirmasi bayar' },
-              { id: 'admin', desc: 'Akses penuh + harga' },
+              { id: 'karyawan', desc: 'Jual & konfirmasi di 1 toko' },
+              { id: 'admin', desc: 'Akses penuh semua toko' },
             ].map((r) => (
               <button key={r.id} type="button" disabled={isSelf} onClick={() => setForm((f) => ({ ...f, role: r.id }))}
                 className={`rounded-xl border p-3 text-left transition ${form.role === r.id ? 'border-brand-500 bg-brand-50 ring-2 ring-brand-500/20' : 'border-slate-200 hover:border-slate-300'}`}>
@@ -379,6 +684,21 @@ function UserForm({ user, onClose, onSaved, isSelf }) {
             ))}
           </div>
         </div>
+        {form.role === 'karyawan' ? (
+          <div>
+            <label className="label" htmlFor="u-store">Toko yang ditugaskan</label>
+            <select id="u-store" className="input" value={form.storeId} onChange={set('storeId')} required>
+              {stores.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+            <p className="hint">Karyawan hanya dapat melihat dan melayani transaksi di toko ini.</p>
+          </div>
+        ) : (
+          <div className="rounded-xl bg-brand-50 px-3.5 py-2.5 text-xs text-brand-800 ring-1 ring-brand-200">
+            Admin memiliki akses penuh untuk mengelola dan berpindah ke semua toko/cabang.
+          </div>
+        )}
         {user && !isSelf && (
           <label className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 ring-1 ring-slate-200">
             <span className="text-sm font-semibold text-slate-700">Akun aktif</span>
@@ -391,7 +711,7 @@ function UserForm({ user, onClose, onSaved, isSelf }) {
 }
 
 function UserSettings() {
-  const { user: me } = useAuth();
+  const { user: me, refreshStores } = useAuth();
   const toast = useToast();
   const confirm = useConfirm();
   const [users, setUsers] = useState(null);
@@ -407,6 +727,7 @@ function UserSettings() {
     try {
       await api(`/users/${u.id}`, { method: 'DELETE' });
       load();
+      refreshStores().catch(() => {});
     } catch (err) {
       toast.error(err.message);
     }
@@ -415,7 +736,7 @@ function UserSettings() {
   return (
     <Section
       title="Pengguna"
-      description="Admin dapat mengatur produk & harga. Karyawan dapat berjualan dan mengonfirmasi pembayaran, tetapi tidak dapat mengubah harga."
+      description="Admin dapat mengelola semua toko & harga. Karyawan dikunci pada satu toko tertentu dan tidak dapat mengubah harga."
       action={<button type="button" className="btn btn-primary btn-sm" onClick={() => setEditing('new')}><UserPlus className="size-4" /> Tambah</button>}
     >
       {!users ? (
@@ -430,7 +751,13 @@ function UserSettings() {
                   {u.name} {u.id === me.id && <span className="pill bg-slate-100 text-slate-600">Anda</span>}
                   {!u.active && <span className="pill bg-rose-50 text-rose-600">Nonaktif</span>}
                 </div>
-                <div className="text-xs text-slate-500">@{u.username}</div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                  <span>@{u.username}</span>
+                  <span>•</span>
+                  <span className="inline-flex items-center gap-1 font-medium text-slate-600">
+                    <Store className="size-3" /> {u.role === 'admin' ? 'Semua toko' : u.storeName || 'Belum dipilih'}
+                  </span>
+                </div>
               </div>
               <span className={`pill ${u.role === 'admin' ? 'bg-brand-50 text-brand-700' : 'bg-sky-50 text-sky-700'}`}>{ROLE_LABEL[u.role]}</span>
               <button type="button" className="btn-icon size-9" onClick={() => setEditing(u)} aria-label="Edit"><Pencil className="size-4" /></button>
@@ -447,6 +774,7 @@ function UserSettings() {
           onSaved={() => {
             setEditing(null);
             load();
+            refreshStores().catch(() => {});
           }}
         />
       )}
@@ -455,13 +783,21 @@ function UserSettings() {
 }
 
 export default function SettingsPage() {
-  const { user } = useAuth();
+  const { user, stores } = useAuth();
+  const { settings } = useData();
   const [tab, setTab] = useState('toko');
   if (user.role !== 'admin') return <AdminOnly />;
 
   return (
     <div className="mx-auto max-w-4xl p-4 md:p-8 short:px-5 short:py-4">
-      <PageHeader title="Pengaturan" description="Atur toko, metode pembayaran, dan akun karyawan." />
+      <PageHeader
+        title="Pengaturan"
+        description={
+          stores.length > 1 && settings.store.name
+            ? `Toko aktif: ${settings.store.name} • Atur cabang, metode pembayaran, dan akun karyawan.`
+            : 'Atur toko, cabang, metode pembayaran, dan akun karyawan.'
+        }
+      />
       <div className="scrollbar-none -mx-4 mb-5 flex gap-2 overflow-x-auto px-4">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button key={id} type="button" onClick={() => setTab(id)} className={`chip ${tab === id ? 'chip-on' : 'chip-off'}`}>
@@ -472,7 +808,7 @@ export default function SettingsPage() {
       {tab === 'toko' && <StoreSettings />}
       {tab === 'qris' && <QrisSettings />}
       {tab === 'bank' && <BankSettings />}
-      {tab === 'otomatis' && <AutoConfirmSettings Section={Section} />}
+      {tab === 'otomatis' && <AutoConfirmSettings Section={Section} PaymentModeSwitch={PaymentModeSwitch} />}
       {tab === 'users' && <UserSettings />}
     </div>
   );

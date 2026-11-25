@@ -1,9 +1,9 @@
 {
-  "name": "kasira",
+  "name": "kasira-multi-toko",
   "version": "1.0.0",
   "private": false,
   "license": "MIT",
-  "description": "Kasira - aplikasi kasir web dengan QRIS dinamis, transfer bank, konfirmasi manual, dan layar pelanggan real-time.",
+  "description": "Kasira Multi-Toko - aplikasi kasir web multi-cabang dengan QRIS dinamis, transfer bank, layar pelanggan real-time, dan konfirmasi otomatis.",
   "type": "module",
   "engines": {
     "node": ">=22.13.0"
@@ -19,6 +19,8 @@
     "point-of-sale",
     "kasir",
     "cashier",
+    "multi-store",
+    "multi-toko",
     "qris",
     "qris-dinamis",
     "payment",
@@ -26,12 +28,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/bobby175/kasira.git"
+    "url": "https://github.com/bobby175/kasira-multi-toko.git"
   },
   "bugs": {
-    "url": "https://github.com/bobby175/kasira/issues"
+    "url": "https://github.com/bobby175/kasira-multi-toko/issues"
   },
-  "homepage": "https://github.com/bobby175/kasira#readme",
+  "homepage": "https://github.com/bobby175/kasira-multi-toko#readme",
   "dependencies": {
     "express": "^5.3.0",
     "socket.io": "^4.8.4"

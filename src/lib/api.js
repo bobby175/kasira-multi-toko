@@ -3,6 +3,16 @@ const unauthorizedListeners = new Set();
 /** Identifies this browser tab, so realtime events triggered here are not re-announced here. */
 export const CLIENT_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
+let currentStoreId = null;
+
+export function setApiStoreId(storeId) {
+  currentStoreId = storeId ? Number(storeId) : null;
+}
+
+export function getApiStoreId() {
+  return currentStoreId;
+}
+
 /** Subscribe to "session expired" events (HTTP 401). */
 export function onUnauthorized(listener) {
   unauthorizedListeners.add(listener);
@@ -16,7 +26,8 @@ export class ApiError extends Error {
   }
 }
 
-export async function api(path, { method = 'GET', body } = {}) {
+export async function api(path, { method = 'GET', body, storeId } = {}) {
+  const effectiveStoreId = storeId ?? currentStoreId;
   let res;
   try {
     res = await fetch(`/api${path}`, {
@@ -25,6 +36,7 @@ export async function api(path, { method = 'GET', body } = {}) {
       headers: {
         'X-Kasira': '1',
         'X-Client-Id': CLIENT_ID,
+        ...(effectiveStoreId ? { 'X-Store-Id': String(effectiveStoreId) } : {}),
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,

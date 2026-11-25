@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, BellRing, CheckCircle2, Copy, FlaskConical, RefreshCw, Smartphone } from 'lucide-react';
+import { AlertTriangle, BellRing, CheckCircle2, Copy, FlaskConical, RefreshCw, Smartphone, Store } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { formatTime, rupiah } from '../lib/format.js';
 import { copyText } from '../lib/media.js';
+import { useAuth } from '../state/auth.jsx';
 import { useData } from '../state/data.jsx';
 import { Spinner, useConfirm, useToast } from '../components/ui.jsx';
 
@@ -39,7 +40,8 @@ function CopyButton({ text, label = 'Salin' }) {
   );
 }
 
-export function AutoConfirmSettings({ Section }) {
+export function AutoConfirmSettings({ Section, PaymentModeSwitch }) {
+  const { activeStoreId, stores } = useAuth();
   const { notifyTick, setSettings } = useData();
   const toast = useToast();
   const confirm = useConfirm();
@@ -51,19 +53,26 @@ export function AutoConfirmSettings({ Section }) {
   const [testResult, setTestResult] = useState(null);
 
   const load = useCallback(
-    () =>
+    (resetForm = false) =>
       api('/settings/autoconfirm')
         .then((d) => {
           setData(d);
-          setForm((f) => f ?? { enabled: d.enabled, windowMinutes: d.windowMinutes, ignoreWords: d.ignoreWords });
+          setForm((f) => (resetForm || !f ? { enabled: d.enabled, windowMinutes: d.windowMinutes, ignoreWords: d.ignoreWords } : f));
         })
         .catch((e) => toast.error(e.message)),
     [toast]
   );
 
   useEffect(() => {
-    load();
-  }, [load, notifyTick]); // refresh the log whenever a notification arrives
+    setData(null);
+    setForm(null);
+    setTestResult(null);
+    load(true);
+  }, [activeStoreId, load]);
+
+  useEffect(() => {
+    if (notifyTick > 0) load(false);
+  }, [notifyTick, load]); // refresh the log whenever a notification arrives
 
   if (!data || !form) return <div className="grid place-items-center py-16 text-slate-400"><Spinner className="size-7" /></div>;
 
@@ -79,7 +88,7 @@ export function AutoConfirmSettings({ Section }) {
       const d = await api('/settings/autoconfirm', { method: 'PUT', body: { ...next, windowMinutes: Number(next.windowMinutes) } });
       setData(d);
       setForm({ enabled: d.enabled, windowMinutes: d.windowMinutes, ignoreWords: d.ignoreWords });
-      setSettings((s) => ({ ...s, autoConfirm: { enabled: d.enabled } }));
+      setSettings((s) => ({ ...s, autoConfirm: { enabled: d.enabled, useShared: d.useShared, scope: d.scope } }));
       toast.success(d.enabled ? 'Konfirmasi otomatis aktif' : 'Konfirmasi otomatis dimatikan');
     } catch (err) {
       toast.error(err.message);
@@ -118,13 +127,33 @@ export function AutoConfirmSettings({ Section }) {
         title="Konfirmasi Otomatis"
         description="Kasira membaca notifikasi pembayaran (aplikasi merchant QRIS atau m-banking) yang diteruskan dari HP Android. Jika nominalnya cocok dengan tepat satu pembayaran yang menunggu, pembayaran langsung lunas. Tombol konfirmasi manual tetap bisa dipakai kapan saja."
       >
+        {PaymentModeSwitch && (
+          <PaymentModeSwitch
+            feature="autoconfirm"
+            useShared={data.useShared}
+            storeName={data.storeName}
+            sharedHint={
+              data.sharedStoreNames?.length > 1
+                ? `Dipakai bersama oleh: ${data.sharedStoreNames.join(', ')}. Satu webhook MacroDroid otomatis mencocokkan pembayaran di cabang-cabang tersebut.`
+                : 'Pengaturan tetap (pusat). Semua cabang yang memilih opsi Pusat memakai webhook MacroDroid yang sama.'
+            }
+            storeHint={`Khusus ${data.storeName}. Webhook ini hanya mencocokkan pembayaran di toko ${data.storeName}.`}
+            onChanged={() => {
+              setTestResult(null);
+              load(true);
+            }}
+          />
+        )}
+
         <label className="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
           <span className="flex items-center gap-3">
             <span className={`grid size-10 place-items-center rounded-xl ${form.enabled ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-500'}`}>
               <BellRing className="size-5" />
             </span>
             <span>
-              <span className="block font-bold text-slate-900">Aktifkan konfirmasi otomatis</span>
+              <span className="block font-bold text-slate-900">
+                Aktifkan konfirmasi otomatis {stores.length > 1 ? (data.useShared ? '(Pusat / Tetap)' : `(${data.storeName})`) : ''}
+              </span>
               <span className="block text-sm text-slate-500">{form.enabled ? 'Aktif' : 'Nonaktif: notifikasi hanya dicatat, tidak mengonfirmasi'}</span>
             </span>
           </span>
@@ -165,7 +194,10 @@ export function AutoConfirmSettings({ Section }) {
         </div>
       </Section>
 
-      <Section title="Alamat webhook" description="Alamat rahasia tujuan notifikasi dari HP Android. Jangan dibagikan: siapa pun yang tahu alamat ini bisa mengirim notifikasi palsu.">
+      <Section
+        title={`Alamat webhook ${stores.length > 1 ? (data.useShared ? '(Pusat / Tetap)' : `(${data.storeName})`) : ''}`}
+        description="Alamat rahasia tujuan notifikasi dari HP Android. Jangan dibagikan: siapa pun yang tahu alamat ini bisa mengirim notifikasi palsu."
+      >
         {origins.length > 1 && (
           <div className="mb-2 flex flex-wrap gap-2">
             {origins.map((o, i) => (
@@ -189,7 +221,7 @@ export function AutoConfirmSettings({ Section }) {
       <Section title="Cara pasang di HP Android (MacroDroid)" description="Pasang di HP yang menerima notifikasi pembayaran. iPhone tidak mengizinkan aplikasi membaca notifikasi aplikasi lain.">
         <ol className="space-y-3 text-sm text-slate-700">
           {[
-            <>Di HP yang menerima notifikasi pembayaran, sambungkan ke Wi-Fi yang sama dengan PC Kasira, lalu buka alamat Kasira (mis. <b>{origins[0]}</b>) di browser HP. Halaman harus terbuka.</>,
+            <>Di HP yang menerima notifikasi pembayaran, sambungkan ke Wi-Fi yang sama dengan server Kasira (atau jaringan Tailscale / HTTPS), lalu buka alamat Kasira (mis. <b>{origins[0]}</b>) di browser HP. Halaman harus terbuka.</>,
             <>Install <b>MacroDroid</b> dari Play Store. Buat Macro baru. Pemicu: <b>Notification → Notification Received</b>, pilih <b>Select Applications</b> lalu centang aplikasi merchant QRIS / m-banking Anda saja. Izinkan <b>akses notifikasi</b> saat diminta.</>,
             <>Aksi: <b>HTTP Request</b>, metode <b>POST</b>, URL = alamat webhook di atas. Di <b>Content Body</b> pilih tipe <b>text/plain</b> lalu isi:</>,
             <>Simpan macro. Uji dengan <b>Test actions</b> di MacroDroid: di &quot;Notifikasi terakhir&quot; di bawah harus muncul <b>Tes koneksi OK</b>. Setelah itu coba pembayaran kecil sungguhan.</>,
@@ -228,6 +260,7 @@ export function AutoConfirmSettings({ Section }) {
             {testResult.transaction && (
               <span className="text-slate-600">
                 → <b>{testResult.transaction.code}</b> ({rupiah(testResult.transaction.total)})
+                {testResult.transaction.storeName ? ` • ${testResult.transaction.storeName}` : ''}
               </span>
             )}
             {testResult.detail && <span className="w-full text-xs text-slate-500">{testResult.detail}</span>}
@@ -238,7 +271,7 @@ export function AutoConfirmSettings({ Section }) {
       <Section
         title="Notifikasi terakhir"
         description="Setiap notifikasi yang diterima dan hasilnya."
-        action={<button type="button" className="btn btn-secondary btn-sm" onClick={load}><RefreshCw className="size-3.5" /> Muat ulang</button>}
+        action={<button type="button" className="btn btn-secondary btn-sm" onClick={() => load(false)}><RefreshCw className="size-3.5" /> Muat ulang</button>}
       >
         {data.recent.length === 0 ? (
           <p className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500 ring-1 ring-slate-200">Belum ada notifikasi masuk. Setelah MacroDroid terpasang, notifikasi pembayaran akan tercatat di sini.</p>
@@ -258,6 +291,11 @@ export function AutoConfirmSettings({ Section }) {
                   {n.txCode && (
                     <span className="flex items-center gap-1 text-xs font-semibold text-emerald-700">
                       <CheckCircle2 className="size-3.5" /> {n.txCode}
+                    </span>
+                  )}
+                  {data.useShared && n.txStoreName && stores.length > 1 && (
+                    <span className="pill bg-slate-100 text-slate-600">
+                      <Store className="size-3" /> {n.txStoreName}
                     </span>
                   )}
                   {n.amounts.length > 0 && <span className="text-xs text-slate-500">{n.amounts.map(rupiah).join(', ')}</span>}
